@@ -1,4 +1,35 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum BeError {
+    #[error("Boot environment '{name}' not found")]
+    NotFound { name: String },
+
+    #[error("Boot environment '{name}' already exists")]
+    Conflict { name: String },
+
+    #[error("Mount point '{path}' is already in use")]
+    MountPointInUse { path: String },
+
+    #[error("Cannot destroy active boot environment '{name}'")]
+    CannotDestroyActive { name: String },
+
+    #[error("Cannot unmount boot environment '{name}': {reason}")]
+    UnmountFailed { name: String, reason: String },
+
+    #[error("Invalid boot environment name '{name}': {reason}")]
+    InvalidBeName { name: String, reason: String },
+
+    #[error("ZFS operation failed: {message}")]
+    ZfsError { message: String },
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Operation not supported in no-op mode")]
+    NoOpError,
+}
 
 /// Whether a boot environment is mounted read-write (the default) or
 /// read-only.
@@ -19,9 +50,15 @@ trait BeRoot {
         description: Option<&str>,
         clone_from: Option<&str>,
         properties: &[String],
-    );
+    ) -> Result<(), BeError>;
 
-    fn destroy(&self, target: &str, force_unmount: bool, force_no_verify: bool, snapshots: bool);
+    fn destroy(
+        &self,
+        target: &str,
+        force_unmount: bool,
+        force_no_verify: bool,
+        snapshots: bool,
+    ) -> Result<(), BeError>;
 
     fn list(
         &self,
@@ -32,17 +69,17 @@ trait BeRoot {
         parsable: bool,
         sort_date: bool,
         sort_name: bool,
-    );
+    ) -> Result<(), BeError>;
 
-    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode);
+    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), BeError>;
 
-    fn unmount(&self, target: &str, force: bool);
+    fn unmount(&self, target: &str, force: bool) -> Result<(), BeError>;
 
-    fn rename(&self, be_name: &str, new_name: &str);
+    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError>;
 
-    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool);
+    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), BeError>;
 
-    fn rollback(&self, be_name: &str, snapshot: &str);
+    fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError>;
 }
 
 struct NoopBeRoot {
@@ -62,10 +99,18 @@ impl BeRoot for NoopBeRoot {
         description: Option<&str>,
         clone_from: Option<&str>,
         properties: &[String],
-    ) {
+    ) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
+
+        // Demo error case: if BE name is "error", return an error
+        if be_name == "error" {
+            return Err(BeError::Conflict {
+                name: be_name.to_string(),
+            });
+        }
+
         println!("Create command called with BE name: {}", be_name);
         if let Some(desc) = description {
             println!("  - Description: {}", desc);
@@ -77,9 +122,16 @@ impl BeRoot for NoopBeRoot {
             println!("  - Properties: {:?}", properties);
         }
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
-    fn destroy(&self, target: &str, force_unmount: bool, force_no_verify: bool, snapshots: bool) {
+    fn destroy(
+        &self,
+        target: &str,
+        force_unmount: bool,
+        force_no_verify: bool,
+        snapshots: bool,
+    ) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
@@ -94,6 +146,7 @@ impl BeRoot for NoopBeRoot {
             println!("  - Destroy snapshots: true");
         }
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
     fn list(
@@ -105,7 +158,7 @@ impl BeRoot for NoopBeRoot {
         parsable: bool,
         sort_date: bool,
         sort_name: bool,
-    ) {
+    ) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
@@ -132,9 +185,10 @@ impl BeRoot for NoopBeRoot {
             println!("  - Sort by name: true");
         }
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
-    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) {
+    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
@@ -149,9 +203,10 @@ impl BeRoot for NoopBeRoot {
             }
         );
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
-    fn unmount(&self, target: &str, force: bool) {
+    fn unmount(&self, target: &str, force: bool) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
@@ -160,17 +215,19 @@ impl BeRoot for NoopBeRoot {
             println!("  - Force: true");
         }
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
-    fn rename(&self, be_name: &str, new_name: &str) {
+    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
         println!("Rename command called: {} -> {}", be_name, new_name);
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
-    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) {
+    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
@@ -182,9 +239,10 @@ impl BeRoot for NoopBeRoot {
             println!("  - Remove temp: true");
         }
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 
-    fn rollback(&self, be_name: &str, snapshot: &str) {
+    fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
         if let Some(root) = &self.root_path {
             println!("Using boot environment root: {}", root);
         }
@@ -193,6 +251,7 @@ impl BeRoot for NoopBeRoot {
             be_name, snapshot
         );
         println!("  (This is a no-op implementation)");
+        Ok(())
     }
 }
 
@@ -329,7 +388,7 @@ fn main() {
         println!("Verbose mode enabled");
     }
 
-    match &cli.command {
+    let result = match &cli.command {
         Some(Commands::Create {
             be_name,
             activate,
@@ -338,15 +397,17 @@ fn main() {
             clone_from,
             property,
         }) => {
-            beroot.create(
+            let result = beroot.create(
                 be_name,
                 description.as_deref(),
                 clone_from.as_deref(),
                 property,
             );
 
-            if *activate || *temp_activate {
-                beroot.activate(be_name, *temp_activate, false);
+            if result.is_ok() && (*activate || *temp_activate) {
+                beroot.activate(be_name, *temp_activate, false)
+            } else {
+                result
             }
         }
         Some(Commands::Destroy {
@@ -354,9 +415,7 @@ fn main() {
             force_unmount,
             force_no_verify,
             snapshots,
-        }) => {
-            beroot.destroy(target, *force_unmount, *force_no_verify, *snapshots);
-        }
+        }) => beroot.destroy(target, *force_unmount, *force_no_verify, *snapshots),
         Some(Commands::List {
             be_name,
             all,
@@ -365,43 +424,34 @@ fn main() {
             parsable,
             sort_date,
             sort_name,
-        }) => {
-            beroot.list(
-                be_name.as_deref(),
-                *all,
-                *datasets,
-                *snapshots,
-                *parsable,
-                *sort_date,
-                *sort_name,
-            );
-        }
+        }) => beroot.list(
+            be_name.as_deref(),
+            *all,
+            *datasets,
+            *snapshots,
+            *parsable,
+            *sort_date,
+            *sort_name,
+        ),
         Some(Commands::Mount {
             be_name,
             mountpoint,
             mode,
-        }) => {
-            beroot.mount(be_name, mountpoint, *mode);
-        }
-        Some(Commands::Unmount { target, force }) => {
-            beroot.unmount(target, *force);
-        }
-        Some(Commands::Rename { be_name, new_name }) => {
-            beroot.rename(be_name, new_name);
-        }
+        }) => beroot.mount(be_name, mountpoint, *mode),
+        Some(Commands::Unmount { target, force }) => beroot.unmount(target, *force),
+        Some(Commands::Rename { be_name, new_name }) => beroot.rename(be_name, new_name),
         Some(Commands::Activate {
             be_name,
             temporary,
             remove_temp,
-        }) => {
-            beroot.activate(be_name, *temporary, *remove_temp);
-        }
-        Some(Commands::Rollback { be_name, snapshot }) => {
-            beroot.rollback(be_name, snapshot);
-        }
-        None => {
-            beroot.list(None, false, false, false, false, false, false);
-        }
+        }) => beroot.activate(be_name, *temporary, *remove_temp),
+        Some(Commands::Rollback { be_name, snapshot }) => beroot.rollback(be_name, snapshot),
+        None => beroot.list(None, false, false, false, false, false, false),
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
     }
 }
 
