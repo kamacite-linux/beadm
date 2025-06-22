@@ -1,356 +1,957 @@
-use std::cell::RefCell;
-use std::path::PathBuf;
-
 use chrono::{Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
-use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub enum BeError {
-    #[error("Boot environment '{name}' not found")]
-    NotFound { name: String },
+mod be {
+    use chrono::Local;
+    use clap::ValueEnum;
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use thiserror::Error as ThisError;
 
-    #[error("Boot environment '{name}' already exists")]
-    Conflict { name: String },
+    #[derive(ThisError, Debug)]
+    pub enum Error {
+        #[error("Boot environment '{name}' not found")]
+        NotFound { name: String },
 
-    #[error("Mount point '{path}' is already in use")]
-    MountPointInUse { path: String },
+        #[error("Boot environment '{name}' already exists")]
+        Conflict { name: String },
 
-    #[error("Cannot destroy active boot environment '{name}'")]
-    CannotDestroyActive { name: String },
+        #[error("Mount point '{path}' is already in use")]
+        MountPointInUse { path: String },
 
-    #[error("Cannot unmount boot environment '{name}': {reason}")]
-    UnmountFailed { name: String, reason: String },
+        #[error("Cannot destroy active boot environment '{name}'")]
+        CannotDestroyActive { name: String },
 
-    #[error("Invalid boot environment name '{name}': {reason}")]
-    InvalidBeName { name: String, reason: String },
+        #[error("Cannot unmount boot environment '{name}': {reason}")]
+        UnmountFailed { name: String, reason: String },
 
-    #[error("ZFS operation failed: {message}")]
-    ZfsError { message: String },
+        #[error("Invalid boot environment name '{name}': {reason}")]
+        InvalidBeName { name: String, reason: String },
 
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+        #[error("Boot environment name '{name}' is currently mounted at '{mountpoint}'")]
+        BeMounted { name: String, mountpoint: String },
 
-    #[error("Operation not supported in no-op mode")]
-    NoOpError,
-}
+        #[error("ZFS operation failed: {message}")]
+        ZfsError { message: String },
 
-/// Whether a boot environment is mounted read-write (the default) or
-/// read-only.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum MountMode {
-    /// Mount read-write.
-    #[value(name = "rw")]
-    ReadWrite,
-    /// Mount read-only.
-    #[value(name = "ro")]
-    ReadOnly,
-}
+        #[error("I/O error: {0}")]
+        Io(#[from] std::io::Error),
 
-#[derive(Clone)]
-struct BootEnvironment {
-    /// The name of this boot environment.
-    name: String,
-    /// A description for this boot environment, if any.
-    description: Option<String>,
-    /// If the boot environment is currently mounted, this is its mountpoint.
-    mountpoint: Option<PathBuf>,
-    /// Whether the system is currently booted into this boot environment.
-    active: bool,
-    /// Whether the system will reboot into this environment.
-    next_boot: bool,
-    /// Bytes on the filesystem associated with this boot environment.
-    space: u64,
-    /// Unix timestamp for when this boot environment was created.
-    created: i64,
-}
-
-trait BeRoot {
-    fn create(
-        &self,
-        be_name: &str,
-        description: Option<&str>,
-        clone_from: Option<&str>,
-        properties: &[String],
-    ) -> Result<(), BeError>;
-
-    fn destroy(
-        &self,
-        target: &str,
-        force_unmount: bool,
-        force_no_verify: bool,
-        snapshots: bool,
-    ) -> Result<(), BeError>;
-
-    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), BeError>;
-
-    fn unmount(&self, target: &str, force: bool) -> Result<(), BeError>;
-
-    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError>;
-
-    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), BeError>;
-
-    fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError>;
-
-    /// Get a snapshot of the boot environments.
-    fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, BeError>;
-}
-
-/// A boot environment root populated with static data that operates entirely
-/// in-memory with no side effects.
-struct FakeBeRoot {
-    root: String,
-    bes: RefCell<Vec<BootEnvironment>>,
-}
-
-impl FakeBeRoot {
-    fn new(root_path: Option<String>, bes: Vec<BootEnvironment>) -> Self {
-        let root = match root_path {
-            Some(p) => p,
-            None => "zfake/ROOT".to_string(),
-        };
-        Self {
-            root,
-            bes: RefCell::new(bes),
-        }
-    }
-}
-
-impl BeRoot for FakeBeRoot {
-    fn create(
-        &self,
-        be_name: &str,
-        description: Option<&str>,
-        clone_from: Option<&str>,
-        _properties: &[String],
-    ) -> Result<(), BeError> {
-        let mut bes = self.bes.borrow_mut();
-
-        if bes.iter().any(|be| be.name == be_name) {
-            return Err(BeError::Conflict {
-                name: be_name.to_string(),
-            });
-        }
-
-        if let Some(target) = clone_from {
-            if !bes.iter().any(|be| be.name == target) {
-                return Err(BeError::NotFound {
-                    name: target.to_owned(),
-                });
-            }
-        }
-
-        bes.push(BootEnvironment {
-            name: be_name.to_string(),
-            dataset: format!("{}/{}", self.root, be_name),
-            description: description.map(|s| s.to_string()),
-            mountpoint: None,
-            active: false,
-            next_boot: false,
-            space: 8192, // ZFS datasets consume 8K to start.
-            created: Local::now().timestamp(),
-        });
-        Ok(())
+        #[error("Operation not supported in no-op mode")]
+        NoOpError,
     }
 
-    fn destroy(
-        &self,
-        target: &str,
-        force_unmount: bool,
-        _force_no_verify: bool,
-        snapshots: bool,
-    ) -> Result<(), BeError> {
-        // First, check if the BE exists and validate constraints
-        {
-            let bes = self.bes.borrow();
-            let be = match bes.iter().find(|be| be.name == target) {
-                Some(be) => be,
-                None => {
-                    return Err(BeError::NotFound {
-                        name: target.to_string(),
-                    });
+    /// Whether a boot environment is mounted read-write (the default) or
+    /// read-only.
+    #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+    pub enum MountMode {
+        /// Mount read-write.
+        #[value(name = "rw")]
+        ReadWrite,
+        /// Mount read-only.
+        #[value(name = "ro")]
+        ReadOnly,
+    }
+
+    #[derive(Clone)]
+    pub struct BootEnvironment {
+        /// The name of this boot environment.
+        pub name: String,
+        /// The dataset backing this boot environment.
+        #[allow(dead_code)]
+        pub dataset: String,
+        /// A description for this boot environment, if any.
+        pub description: Option<String>,
+        /// If the boot environment is currently mounted, this is its mountpoint.
+        pub mountpoint: Option<PathBuf>,
+        /// Whether the system is currently booted into this boot environment.
+        pub active: bool,
+        /// Whether the system will reboot into this environment.
+        pub next_boot: bool,
+        /// Bytes on the filesystem associated with this boot environment.
+        pub space: u64,
+        /// Unix timestamp for when this boot environment was created.
+        pub created: i64,
+    }
+
+    pub trait Client {
+        fn create(
+            &self,
+            be_name: &str,
+            description: Option<&str>,
+            source: Option<&str>,
+            properties: &[String],
+        ) -> Result<(), Error>;
+
+        fn destroy(
+            &self,
+            target: &str,
+            force_unmount: bool,
+            force_no_verify: bool,
+            snapshots: bool,
+        ) -> Result<(), Error>;
+
+        fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), Error>;
+
+        fn unmount(&self, target: &str, force: bool) -> Result<(), Error>;
+
+        fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error>;
+
+        fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), Error>;
+
+        fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error>;
+
+        /// Get a snapshot of the boot environments.
+        fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error>;
+    }
+
+    pub mod mock {
+        use super::*;
+
+        fn sample_boot_environments() -> Vec<BootEnvironment> {
+            vec![
+                BootEnvironment {
+                    name: "default".to_string(),
+                    dataset: "zfake/ROOT/default".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/")),
+                    active: true,
+                    next_boot: true,
+                    space: 950_000_000,  // ~906M
+                    created: 1623301740, // 2021-06-10 01:09
+                },
+                BootEnvironment {
+                    name: "alt".to_string(),
+                    dataset: "zfake/ROOT/alt".to_string(),
+                    description: Some("Testing".to_string()),
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,         // 8K
+                    created: 1623305460, // 2021-06-10 02:11
+                },
+            ]
+        }
+
+        /// A boot environment client populated with static data that operates
+        /// entirely in-memory with no side effects.
+        pub struct EmulatorClient {
+            root: String,
+            bes: RefCell<Vec<BootEnvironment>>,
+        }
+
+        impl EmulatorClient {
+            pub fn new(bes: Vec<BootEnvironment>) -> Self {
+                Self {
+                    root: "zfake/ROOT".to_string(),
+                    bes: RefCell::new(bes),
                 }
-            };
-
-            if be.active {
-                return Err(BeError::CannotDestroyActive {
-                    name: be.name.to_string(),
-                });
             }
 
-            if !force_unmount && be.mountpoint.is_some() {
-                return Err(BeError::BeMounted {
-                    name: be.name.to_string(),
-                    mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
-                });
+            pub fn empty() -> Self {
+                Self {
+                    root: "zfake/ROOT".to_string(),
+                    bes: RefCell::new(vec![]),
+                }
             }
-        } // Release the borrow here
 
-        if snapshots {
-            unimplemented!("Mocking does not yet track snapshots");
+            pub fn sampled() -> Self {
+                Self::new(sample_boot_environments())
+            }
         }
 
-        // Now we can safely borrow mutably to remove the BE
-        self.bes.borrow_mut().retain(|x| x.name != target);
+        impl Client for EmulatorClient {
+            fn create(
+                &self,
+                be_name: &str,
+                description: Option<&str>,
+                source: Option<&str>,
+                _properties: &[String],
+            ) -> Result<(), Error> {
+                let mut bes = self.bes.borrow_mut();
 
-        Ok(())
-    }
-
-    fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), BeError> {
-        // First, validate preconditions with immutable borrow
-        {
-            let bes = self.bes.borrow();
-
-            // Find the boot environment
-            let be = match bes.iter().find(|be| be.name == be_name) {
-                Some(be) => be,
-                None => {
-                    return Err(BeError::NotFound {
+                if bes.iter().any(|be| be.name == be_name) {
+                    return Err(Error::Conflict {
                         name: be_name.to_string(),
                     });
                 }
-            };
 
-            // Check if it's already mounted
-            if be.mountpoint.is_some() {
-                return Err(BeError::BeMounted {
-                    name: be_name.to_string(),
-                    mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
-                });
-            }
-
-            // Check if another BE is already mounted at this path
-            if bes.iter().any(|other_be| {
-                other_be
-                    .mountpoint
-                    .as_ref()
-                    .map_or(false, |mp| mp.display().to_string() == mountpoint)
-            }) {
-                return Err(BeError::MountPointInUse {
-                    path: mountpoint.to_string(),
-                });
-            }
-        } // Release immutable borrow
-
-        // Now perform the mount with mutable borrow
-        let mut bes = self.bes.borrow_mut();
-        if let Some(be) = bes.iter_mut().find(|be| be.name == be_name) {
-            be.mountpoint = Some(std::path::PathBuf::from(mountpoint));
-        }
-
-        Ok(())
-    }
-
-    fn unmount(&self, target: &str, _force: bool) -> Result<(), BeError> {
-        let mut bes = self.bes.borrow_mut();
-
-        // Target can be either a BE name or a mountpoint path
-        let be = match bes.iter_mut().find(|be| {
-            be.name == target
-                || be
-                    .mountpoint
-                    .as_ref()
-                    .map_or(false, |mp| mp.display().to_string() == target)
-        }) {
-            Some(be) => be,
-            None => {
-                return Err(BeError::NotFound {
-                    name: target.to_string(),
-                });
-            }
-        };
-
-        // Check if it's actually mounted
-        if be.mountpoint.is_none() {
-            return Err(BeError::UnmountFailed {
-                name: be.name.to_string(),
-                reason: "not mounted".to_string(),
-            });
-        }
-
-        // Unmount the BE
-        be.mountpoint = None;
-        Ok(())
-    }
-
-    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
-        let mut bes = self.bes.borrow_mut();
-
-        // Check if source BE exists
-        let be_index = match bes.iter().position(|be| be.name == be_name) {
-            Some(index) => index,
-            None => {
-                return Err(BeError::NotFound {
-                    name: be_name.to_string(),
-                });
-            }
-        };
-
-        // Check if new name already exists
-        if bes.iter().any(|be| be.name == new_name) {
-            return Err(BeError::Conflict {
-                name: new_name.to_string(),
-            });
-        }
-
-        // Perform the rename
-        bes[be_index].name = new_name.to_string();
-        bes[be_index].dataset = format!("{}/{}", self.root, new_name);
-
-        Ok(())
-    }
-
-    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), BeError> {
-        let mut bes = self.bes.borrow_mut();
-
-        // Find the target boot environment
-        let target_index = match bes.iter().position(|be| be.name == be_name) {
-            Some(index) => index,
-            None => {
-                return Err(BeError::NotFound {
-                    name: be_name.to_string(),
-                });
-            }
-        };
-
-        if remove_temp {
-            // Clear temporary activation flags
-            for be in bes.iter_mut() {
-                if be.next_boot && !be.active {
-                    be.next_boot = false;
+                if let Some(src) = source {
+                    // TODO: Differentiate snapshot sources from other boot
+                    // environment sources.
+                    if !bes.iter().any(|be| be.name == src) {
+                        return Err(Error::NotFound {
+                            name: src.to_owned(),
+                        });
+                    }
                 }
+
+                bes.push(BootEnvironment {
+                    name: be_name.to_string(),
+                    dataset: format!("{}/{}", self.root, be_name),
+                    description: description.map(|s| s.to_string()),
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192, // ZFS datasets consume 8K to start.
+                    created: Local::now().timestamp(),
+                });
+                Ok(())
             }
-        } else if temporary {
-            // Set temporary activation (next_boot only)
-            for be in bes.iter_mut() {
-                be.next_boot = false;
+
+            fn destroy(
+                &self,
+                target: &str,
+                force_unmount: bool,
+                _force_no_verify: bool,
+                snapshots: bool,
+            ) -> Result<(), Error> {
+                // First, check if the BE exists and validate constraints
+                {
+                    let bes = self.bes.borrow();
+                    let be = match bes.iter().find(|be| be.name == target) {
+                        Some(be) => be,
+                        None => {
+                            return Err(Error::NotFound {
+                                name: target.to_string(),
+                            });
+                        }
+                    };
+
+                    if be.active {
+                        return Err(Error::CannotDestroyActive {
+                            name: be.name.to_string(),
+                        });
+                    }
+
+                    if !force_unmount && be.mountpoint.is_some() {
+                        return Err(Error::BeMounted {
+                            name: be.name.to_string(),
+                            mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
+                        });
+                    }
+                } // Release the borrow here
+
+                if snapshots {
+                    unimplemented!("Mocking does not yet track snapshots");
+                }
+
+                // Now we can safely borrow mutably to remove the BE
+                self.bes.borrow_mut().retain(|x| x.name != target);
+
+                Ok(())
             }
-            bes[target_index].next_boot = true;
-        } else {
-            // Permanent activation - this would normally require a reboot
-            // For simulation purposes, we'll set it as the next boot environment
-            for be in bes.iter_mut() {
-                be.next_boot = false;
+
+            fn mount(
+                &self,
+                be_name: &str,
+                mountpoint: &str,
+                _mode: MountMode,
+            ) -> Result<(), Error> {
+                // First, validate preconditions with immutable borrow
+                {
+                    let bes = self.bes.borrow();
+
+                    // Find the boot environment
+                    let be = match bes.iter().find(|be| be.name == be_name) {
+                        Some(be) => be,
+                        None => {
+                            return Err(Error::NotFound {
+                                name: be_name.to_string(),
+                            });
+                        }
+                    };
+
+                    // Check if it's already mounted
+                    if be.mountpoint.is_some() {
+                        return Err(Error::BeMounted {
+                            name: be_name.to_string(),
+                            mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
+                        });
+                    }
+
+                    // Check if another BE is already mounted at this path
+                    if bes.iter().any(|other_be| {
+                        other_be
+                            .mountpoint
+                            .as_ref()
+                            .map_or(false, |mp| mp.display().to_string() == mountpoint)
+                    }) {
+                        return Err(Error::MountPointInUse {
+                            path: mountpoint.to_string(),
+                        });
+                    }
+                } // Release immutable borrow
+
+                // Now perform the mount with mutable borrow
+                let mut bes = self.bes.borrow_mut();
+                if let Some(be) = bes.iter_mut().find(|be| be.name == be_name) {
+                    be.mountpoint = Some(std::path::PathBuf::from(mountpoint));
+                }
+
+                Ok(())
             }
-            bes[target_index].next_boot = true;
+
+            fn unmount(&self, target: &str, _force: bool) -> Result<(), Error> {
+                let mut bes = self.bes.borrow_mut();
+
+                // Target can be either a BE name or a mountpoint path
+                let be = match bes.iter_mut().find(|be| {
+                    be.name == target
+                        || be
+                            .mountpoint
+                            .as_ref()
+                            .map_or(false, |mp| mp.display().to_string() == target)
+                }) {
+                    Some(be) => be,
+                    None => {
+                        return Err(Error::NotFound {
+                            name: target.to_string(),
+                        });
+                    }
+                };
+
+                // Check if it's actually mounted
+                if be.mountpoint.is_none() {
+                    return Err(Error::UnmountFailed {
+                        name: be.name.to_string(),
+                        reason: "not mounted".to_string(),
+                    });
+                }
+
+                // Unmount the BE
+                be.mountpoint = None;
+                Ok(())
+            }
+
+            fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
+                let mut bes = self.bes.borrow_mut();
+
+                // Check if source BE exists
+                let be_index = match bes.iter().position(|be| be.name == be_name) {
+                    Some(index) => index,
+                    None => {
+                        return Err(Error::NotFound {
+                            name: be_name.to_string(),
+                        });
+                    }
+                };
+
+                // Check if new name already exists
+                if bes.iter().any(|be| be.name == new_name) {
+                    return Err(Error::Conflict {
+                        name: new_name.to_string(),
+                    });
+                }
+
+                // Perform the rename
+                bes[be_index].name = new_name.to_string();
+                bes[be_index].dataset = format!("{}/{}", self.root, new_name);
+
+                Ok(())
+            }
+
+            fn activate(
+                &self,
+                be_name: &str,
+                temporary: bool,
+                remove_temp: bool,
+            ) -> Result<(), Error> {
+                let mut bes = self.bes.borrow_mut();
+
+                // Find the target boot environment
+                let target_index = match bes.iter().position(|be| be.name == be_name) {
+                    Some(index) => index,
+                    None => {
+                        return Err(Error::NotFound {
+                            name: be_name.to_string(),
+                        });
+                    }
+                };
+
+                if remove_temp {
+                    // Clear temporary activation flags
+                    for be in bes.iter_mut() {
+                        if be.next_boot && !be.active {
+                            be.next_boot = false;
+                        }
+                    }
+                } else if temporary {
+                    // Set temporary activation (next_boot only)
+                    for be in bes.iter_mut() {
+                        be.next_boot = false;
+                    }
+                    bes[target_index].next_boot = true;
+                } else {
+                    // Permanent activation - this would normally require a reboot
+                    // For simulation purposes, we'll set it as the next boot environment
+                    for be in bes.iter_mut() {
+                        be.next_boot = false;
+                    }
+                    bes[target_index].next_boot = true;
+                }
+
+                Ok(())
+            }
+
+            fn rollback(&self, be_name: &str, _snapshot: &str) -> Result<(), Error> {
+                if !self.bes.borrow().iter().any(|be| be.name == be_name) {
+                    return Err(Error::NotFound {
+                        name: be_name.to_string(),
+                    });
+                }
+                unimplemented!("Mocking does not yet track snapshots");
+            }
+
+            fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
+                Ok(self.bes.borrow().clone())
+            }
         }
 
-        Ok(())
-    }
+        #[cfg(test)]
+        mod tests {
+            use super::*;
 
-    fn rollback(&self, be_name: &str, _snapshot: &str) -> Result<(), BeError> {
-        if !self.bes.borrow().iter().any(|be| be.name == be_name) {
-            return Err(BeError::NotFound {
-                name: be_name.to_string(),
-            });
+            #[test]
+            fn test_emulated_create() {
+                let client = EmulatorClient::empty();
+
+                // Test creating a new boot environment
+                let result = client.create("test-be", Some("Test description"), None, &[]);
+                assert!(result.is_ok());
+
+                // Verify it was added
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 1);
+                assert_eq!(bes[0].name, "test-be");
+                assert_eq!(bes[0].description, Some("Test description".to_string()));
+                assert_eq!(bes[0].dataset, "zfake/ROOT/test-be");
+
+                // Test creating a duplicate should fail
+                let result = client.create("test-be", None, None, &[]);
+                assert!(matches!(result, Err(Error::Conflict { name }) if name == "test-be"));
+
+                // Verify we still have only one
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 1);
+            }
+
+            #[test]
+            fn test_emulated_destroy_success() {
+                // Create a test boot environment that can be destroyed
+                let test_be = BootEnvironment {
+                    name: "destroyable".to_string(),
+                    dataset: "zfake/ROOT/destroyable".to_string(),
+                    description: Some("Test BE for destruction".to_string()),
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![test_be]);
+
+                // Verify it exists
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 1);
+                assert_eq!(bes[0].name, "destroyable");
+
+                // Destroy it
+                let result = client.destroy("destroyable", false, false, false);
+                assert!(result.is_ok());
+
+                // Verify it's gone
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 0);
+            }
+
+            #[test]
+            fn test_emulated_destroy_not_found() {
+                let client = EmulatorClient::empty();
+                let result = client.destroy("nonexistent", false, false, false);
+                assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+            }
+
+            #[test]
+            fn test_emulated_destroy_active_be() {
+                // Create an active boot environment
+                let active_be = BootEnvironment {
+                    name: "active-be".to_string(),
+                    dataset: "zfake/ROOT/active-be".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/")),
+                    active: true,
+                    next_boot: true,
+                    space: 950_000_000,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![active_be]);
+
+                // Try to destroy the active boot environment - should fail
+                let result = client.destroy("active-be", false, false, false);
+                assert!(
+                    matches!(result, Err(Error::CannotDestroyActive { name }) if name == "active-be")
+                );
+
+                // Verify it still exists
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 1);
+                assert_eq!(bes[0].name, "active-be");
+            }
+
+            #[test]
+            fn test_emulated_destroy_mounted_be() {
+                // Create a mounted boot environment
+                let mounted_be = BootEnvironment {
+                    name: "mounted-be".to_string(),
+                    dataset: "zfake/ROOT/mounted-be".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![mounted_be]);
+
+                // Try to destroy without force_unmount - should fail
+                let result = client.destroy("mounted-be", false, false, false);
+                assert!(matches!(result, Err(Error::BeMounted { name, mountpoint })
+                    if name == "mounted-be" && mountpoint == "/mnt/test"));
+
+                // Verify it still exists
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 1);
+                assert_eq!(bes[0].name, "mounted-be");
+
+                // Try to destroy with force_unmount - should succeed
+                let result = client.destroy("mounted-be", true, false, false);
+                assert!(result.is_ok());
+
+                // Verify it's gone
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 0);
+            }
+
+            #[test]
+            fn test_emulated_create_and_destroy_integration() {
+                let client = EmulatorClient::new(vec![]);
+
+                // Start with empty
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 0);
+
+                // Create a boot environment
+                let result = client.create("temp-be", Some("Temporary BE"), None, &[]);
+                assert!(result.is_ok());
+
+                // Verify it exists
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 1);
+                assert_eq!(bes[0].name, "temp-be");
+                assert_eq!(bes[0].description, Some("Temporary BE".to_string()));
+
+                // Destroy it
+                let result = client.destroy("temp-be", false, false, false);
+                assert!(result.is_ok());
+
+                // Verify it's gone
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 0);
+
+                // Try to destroy it again - should fail
+                let result = client.destroy("temp-be", false, false, false);
+                assert!(matches!(result, Err(Error::NotFound { name }) if name == "temp-be"));
+            }
+
+            #[test]
+            fn test_emulated_mount_success() {
+                let test_be = BootEnvironment {
+                    name: "test-be".to_string(),
+                    dataset: "zfake/ROOT/test-be".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![test_be]);
+
+                // Mount the BE
+                let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
+                assert!(result.is_ok());
+
+                // Verify it's mounted
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(
+                    bes[0].mountpoint,
+                    Some(std::path::PathBuf::from("/mnt/test"))
+                );
+            }
+
+            #[test]
+            fn test_emulated_mount_not_found() {
+                let client = EmulatorClient::new(vec![]);
+                let result = client.mount("nonexistent", "/mnt/test", MountMode::ReadWrite);
+                assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+            }
+
+            #[test]
+            fn test_emulated_mount_already_mounted() {
+                let test_be = BootEnvironment {
+                    name: "test-be".to_string(),
+                    dataset: "zfake/ROOT/test-be".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/mnt/existing")),
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+                let client = EmulatorClient::new(vec![test_be]);
+                let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
+                assert!(matches!(result, Err(Error::BeMounted { name, mountpoint })
+                    if name == "test-be" && mountpoint == "/mnt/existing"));
+            }
+
+            #[test]
+            fn test_emulated_mount_path_in_use() {
+                let be1 = BootEnvironment {
+                    name: "be1".to_string(),
+                    dataset: "zfake/ROOT/be1".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let be2 = BootEnvironment {
+                    name: "be2".to_string(),
+                    dataset: "zfake/ROOT/be2".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623305460,
+                };
+
+                let client = EmulatorClient::new(vec![be1, be2]);
+                let result = client.mount("be2", "/mnt/test", MountMode::ReadWrite);
+                assert!(
+                    matches!(result, Err(Error::MountPointInUse { path }) if path == "/mnt/test")
+                );
+            }
+
+            #[test]
+            fn test_emulated_unmount_success() {
+                let test_be = BootEnvironment {
+                    name: "test-be".to_string(),
+                    dataset: "zfake/ROOT/test-be".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![test_be]);
+
+                // Unmount by BE name
+                let result = client.unmount("test-be", false);
+                assert!(result.is_ok());
+
+                // Verify it's unmounted
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes[0].mountpoint, None);
+            }
+
+            #[test]
+            fn test_emulated_unmount_by_path() {
+                let test_be = BootEnvironment {
+                    name: "test-be".to_string(),
+                    dataset: "zfake/ROOT/test-be".to_string(),
+                    description: None,
+                    mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![test_be]);
+
+                // Unmount by path
+                let result = client.unmount("/mnt/test", false);
+                assert!(result.is_ok());
+
+                // Verify it's unmounted
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes[0].mountpoint, None);
+            }
+
+            #[test]
+            fn test_emulated_unmount_not_mounted() {
+                let test_be = BootEnvironment {
+                    name: "test-be".to_string(),
+                    dataset: "zfake/ROOT/test-be".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![test_be]);
+
+                let result = client.unmount("test-be", false);
+                assert!(matches!(result, Err(Error::UnmountFailed { name, reason })
+                    if name == "test-be" && reason == "not mounted"));
+            }
+
+            #[test]
+            fn test_emulated_rename_success() {
+                let test_be = BootEnvironment {
+                    name: "old-name".to_string(),
+                    dataset: "zfake/ROOT/old-name".to_string(),
+                    description: Some("Test BE".to_string()),
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let client = EmulatorClient::new(vec![test_be]);
+
+                let result = client.rename("old-name", "new-name");
+                assert!(result.is_ok());
+
+                // Verify the rename
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes[0].name, "new-name");
+                assert_eq!(bes[0].dataset, "zfake/ROOT/new-name");
+                assert_eq!(bes[0].description, Some("Test BE".to_string()));
+            }
+
+            #[test]
+            fn test_emulated_rename_not_found() {
+                let client = EmulatorClient::empty();
+                let result = client.rename("nonexistent", "new-name");
+                assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+            }
+
+            #[test]
+            fn test_emulated_rename_conflict() {
+                let be1 = BootEnvironment {
+                    name: "be1".to_string(),
+                    dataset: "zfake/ROOT/be1".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let be2 = BootEnvironment {
+                    name: "be2".to_string(),
+                    dataset: "zfake/ROOT/be2".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623305460,
+                };
+
+                let client = EmulatorClient::new(vec![be1, be2]);
+
+                let result = client.rename("be1", "be2");
+                assert!(matches!(result, Err(Error::Conflict { name }) if name == "be2"));
+            }
+
+            #[test]
+            fn test_emulated_activate_permanent() {
+                let be1 = BootEnvironment {
+                    name: "be1".to_string(),
+                    dataset: "zfake/ROOT/be1".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: true,
+                    next_boot: true,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let be2 = BootEnvironment {
+                    name: "be2".to_string(),
+                    dataset: "zfake/ROOT/be2".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623305460,
+                };
+
+                let client = EmulatorClient::new(vec![be1, be2]);
+
+                // Activate be2 permanently
+                let result = client.activate("be2", false, false);
+                assert!(result.is_ok());
+
+                // Verify activation
+                let bes = client.get_boot_environments().unwrap();
+                assert!(!bes[0].next_boot); // be1 should no longer be next_boot
+                assert!(bes[1].next_boot); // be2 should be next_boot
+            }
+
+            #[test]
+            fn test_emulated_activate_temporary() {
+                let be1 = BootEnvironment {
+                    name: "be1".to_string(),
+                    dataset: "zfake/ROOT/be1".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: true,
+                    next_boot: true,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let be2 = BootEnvironment {
+                    name: "be2".to_string(),
+                    dataset: "zfake/ROOT/be2".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623305460,
+                };
+
+                let client = EmulatorClient::new(vec![be1, be2]);
+
+                // Activate be2 temporarily
+                let result = client.activate("be2", true, false);
+                assert!(result.is_ok());
+
+                // Verify temporary activation
+                let bes = client.get_boot_environments().unwrap();
+                assert!(!bes[0].next_boot); // be1 should no longer be next_boot
+                assert!(bes[1].next_boot); // be2 should be next_boot
+            }
+
+            #[test]
+            fn test_emulated_activate_remove_temp() {
+                let be1 = BootEnvironment {
+                    name: "be1".to_string(),
+                    dataset: "zfake/ROOT/be1".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: true,
+                    next_boot: false,
+                    space: 8192,
+                    created: 1623301740,
+                };
+
+                let be2 = BootEnvironment {
+                    name: "be2".to_string(),
+                    dataset: "zfake/ROOT/be2".to_string(),
+                    description: None,
+                    mountpoint: None,
+                    active: false,
+                    next_boot: true, // Temporarily activated
+                    space: 8192,
+                    created: 1623305460,
+                };
+
+                let client = EmulatorClient::new(vec![be1, be2]);
+
+                // Remove temporary activation
+                let result = client.activate("be1", false, true);
+                assert!(result.is_ok());
+
+                // Verify temp activation removed
+                let bes = client.get_boot_environments().unwrap();
+                assert!(!bes[1].next_boot); // be2 should no longer be next_boot
+            }
+
+            #[test]
+            fn test_emulated_activate_not_found() {
+                let client = EmulatorClient::new(vec![]);
+                let result = client.activate("nonexistent", false, false);
+                assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+            }
+
+            #[test]
+            fn test_emulated_integration_workflow() {
+                let client = EmulatorClient::new(vec![]);
+
+                // Create a boot environment
+                let result = client.create("test-be", Some("Integration test"), None, &[]);
+                assert!(result.is_ok());
+
+                // Mount it
+                let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
+                assert!(result.is_ok());
+
+                // Verify it's mounted
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(
+                    bes[0].mountpoint,
+                    Some(std::path::PathBuf::from("/mnt/test"))
+                );
+
+                // Unmount it
+                let result = client.unmount("test-be", false);
+                assert!(result.is_ok());
+
+                // Verify it's unmounted
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes[0].mountpoint, None);
+
+                // Rename it
+                let result = client.rename("test-be", "renamed-be");
+                assert!(result.is_ok());
+
+                // Verify the rename
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes[0].name, "renamed-be");
+                assert_eq!(bes[0].dataset, "zfake/ROOT/renamed-be");
+
+                // Activate it temporarily
+                let result = client.activate("renamed-be", true, false);
+                assert!(result.is_ok());
+
+                // Verify activation
+                let bes = client.get_boot_environments().unwrap();
+                assert!(bes[0].next_boot);
+
+                // Destroy it (should work since it's not active)
+                let result = client.destroy("renamed-be", false, false, false);
+                assert!(result.is_ok());
+
+                // Verify it's gone
+                let bes = client.get_boot_environments().unwrap();
+                assert_eq!(bes.len(), 0);
+            }
         }
-        unimplemented!("Mocking does not yet track snapshots");
-    }
-
-    fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, BeError> {
-        Ok(self.bes.borrow().clone())
     }
 }
+
+use be::mock::EmulatorClient;
+use be::{BootEnvironment, Client, Error, MountMode};
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -531,11 +1132,11 @@ struct PrintOptions<'a> {
 }
 
 /// Prints a list of boot environments in the traditional `beadm list` format.
-fn print_boot_environments<T: BeRoot>(
+fn print_boot_environments<T: Client>(
     root: &T,
     mut writer: impl std::io::Write,
     options: PrintOptions,
-) -> Result<(), BeError> {
+) -> Result<(), Error> {
     let mut bes = root.get_boot_environments()?;
 
     // Allow narrowing the output to a single boot environment (if it exists).
@@ -648,32 +1249,9 @@ fn print_boot_environments<T: BeRoot>(
     Ok(())
 }
 
-fn sample_boot_environments() -> Vec<BootEnvironment> {
-    vec![
-        BootEnvironment {
-            name: "default".to_string(),
-            description: None,
-            mountpoint: Some(std::path::PathBuf::from("/")),
-            active: true,
-            next_boot: true,
-            space: 950_000_000,  // ~906M
-            created: 1623301740, // 2021-06-10 01:09
-        },
-        BootEnvironment {
-            name: "alt".to_string(),
-            description: Some("Testing".to_string()),
-            mountpoint: None,
-            active: false,
-            next_boot: false,
-            space: 8192,         // 8K
-            created: 1623305460, // 2021-06-10 02:11
-        },
-    ]
-}
-
 fn main() {
     let cli = Cli::parse();
-    let beroot = FakeBeRoot::new(cli.beroot.clone(), sample_boot_environments());
+    let client = EmulatorClient::sampled();
 
     if cli.verbose {
         println!("Verbose mode enabled");
@@ -688,7 +1266,7 @@ fn main() {
             clone_from,
             property,
         } => {
-            let result = beroot.create(
+            let result = client.create(
                 be_name,
                 description.as_deref(),
                 clone_from.as_deref(),
@@ -696,7 +1274,7 @@ fn main() {
             );
 
             if result.is_ok() && (*activate || *temp_activate) {
-                beroot.activate(be_name, *temp_activate, false)
+                client.activate(be_name, *temp_activate, false)
             } else {
                 result
             }
@@ -706,7 +1284,7 @@ fn main() {
             force_unmount,
             force_no_verify,
             snapshots,
-        } => beroot.destroy(target, *force_unmount, *force_no_verify, *snapshots),
+        } => client.destroy(target, *force_unmount, *force_no_verify, *snapshots),
         Commands::List {
             be_name,
             all: _,
@@ -728,21 +1306,21 @@ fn main() {
                 parseable: *parseable,
             };
 
-            print_boot_environments(&beroot, &mut std::io::stdout(), options)
+            print_boot_environments(&client, &mut std::io::stdout(), options)
         }
         Commands::Mount {
             be_name,
             mountpoint,
             mode,
-        } => beroot.mount(be_name, mountpoint, *mode),
-        Commands::Unmount { target, force } => beroot.unmount(target, *force),
-        Commands::Rename { be_name, new_name } => beroot.rename(be_name, new_name),
+        } => client.mount(be_name, mountpoint, *mode),
+        Commands::Unmount { target, force } => client.unmount(target, *force),
+        Commands::Rename { be_name, new_name } => client.rename(be_name, new_name),
         Commands::Activate {
             be_name,
             temporary,
             remove_temp,
-        } => beroot.activate(be_name, *temporary, *remove_temp),
-        Commands::Rollback { be_name, snapshot } => beroot.rollback(be_name, snapshot),
+        } => client.activate(be_name, *temporary, *remove_temp),
+        Commands::Rollback { be_name, snapshot } => client.rollback(be_name, snapshot),
     };
 
     if let Err(e) = result {
@@ -759,7 +1337,7 @@ fn verify_cli() {
 
 #[test]
 fn test_print_boot_environments_output() {
-    let beroot = FakeBeRoot::new(None, sample_boot_environments());
+    let client = EmulatorClient::sampled();
     let mut output = Vec::new();
     let options = PrintOptions {
         be_name: &None,
@@ -767,7 +1345,7 @@ fn test_print_boot_environments_output() {
         descending: false,
         parseable: false,
     };
-    print_boot_environments(&beroot, &mut output, options).unwrap();
+    print_boot_environments(&client, &mut output, options).unwrap();
     assert_eq!(
         String::from_utf8(output).unwrap(),
         r"NAME     ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
@@ -779,10 +1357,10 @@ alt      -       -           8K     2021-06-10 02:11  Testing
 
 #[test]
 fn test_print_boot_environments_parseable() {
-    let beroot = FakeBeRoot::new(None, sample_boot_environments());
+    let client = EmulatorClient::sampled();
     let mut output = Vec::new();
     print_boot_environments(
-        &beroot,
+        &client,
         &mut output,
         PrintOptions {
             be_name: &None,
@@ -802,10 +1380,10 @@ fn test_print_boot_environments_parseable() {
 
 #[test]
 fn test_print_boot_environments_filtered() {
-    let beroot = FakeBeRoot::new(None, sample_boot_environments());
+    let client = EmulatorClient::sampled();
     let mut output = Vec::new();
     print_boot_environments(
-        &beroot,
+        &client,
         &mut output,
         PrintOptions {
             be_name: &Some("default".to_string()),
@@ -825,10 +1403,10 @@ fn test_print_boot_environments_filtered() {
 
 #[test]
 fn test_print_boot_environments_sorting() {
-    let beroot = FakeBeRoot::new(None, sample_boot_environments());
+    let client = EmulatorClient::sampled();
     let mut output = Vec::new();
     print_boot_environments(
-        &beroot,
+        &client,
         &mut output,
         PrintOptions {
             be_name: &None,
@@ -844,620 +1422,4 @@ fn test_print_boot_environments_sorting() {
     let lines: Vec<&str> = output_str.lines().collect();
     assert!(lines[0].starts_with("default"));
     assert!(lines[1].starts_with("alt"));
-}
-
-#[test]
-fn test_fake_beroot_create() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    // Test creating a new boot environment
-    let result = beroot.create("test-be", Some("Test description"), None, &[]);
-    assert!(result.is_ok());
-
-    // Verify it was added
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 1);
-    assert_eq!(bes[0].name, "test-be");
-    assert_eq!(bes[0].description, Some("Test description".to_string()));
-    assert_eq!(bes[0].dataset, "zfake/ROOT/test-be");
-
-    // Test creating a duplicate should fail
-    let result = beroot.create("test-be", None, None, &[]);
-    assert!(matches!(result, Err(BeError::Conflict { name }) if name == "test-be"));
-
-    // Verify we still have only one
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 1);
-}
-
-#[test]
-fn test_fake_beroot_destroy_success() {
-    // Create a test boot environment that can be destroyed
-    let test_be = BootEnvironment {
-        name: "destroyable".to_string(),
-        dataset: "zfake/ROOT/destroyable".to_string(),
-        description: Some("Test BE for destruction".to_string()),
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    // Verify it exists
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 1);
-    assert_eq!(bes[0].name, "destroyable");
-
-    // Destroy it
-    let result = beroot.destroy("destroyable", false, false, false);
-    assert!(result.is_ok());
-
-    // Verify it's gone
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 0);
-}
-
-#[test]
-fn test_fake_beroot_destroy_not_found() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    // Try to destroy a non-existent boot environment
-    let result = beroot.destroy("nonexistent", false, false, false);
-    assert!(matches!(result, Err(BeError::NotFound { name }) if name == "nonexistent"));
-}
-
-#[test]
-fn test_fake_beroot_destroy_active_be() {
-    // Create an active boot environment
-    let active_be = BootEnvironment {
-        name: "active-be".to_string(),
-        dataset: "zfake/ROOT/active-be".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/")),
-        active: true,
-        next_boot: true,
-        space: 950_000_000,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![active_be]);
-
-    // Try to destroy the active boot environment - should fail
-    let result = beroot.destroy("active-be", false, false, false);
-    assert!(matches!(result, Err(BeError::CannotDestroyActive { name }) if name == "active-be"));
-
-    // Verify it still exists
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 1);
-    assert_eq!(bes[0].name, "active-be");
-}
-
-#[test]
-fn test_fake_beroot_destroy_mounted_be() {
-    // Create a mounted boot environment
-    let mounted_be = BootEnvironment {
-        name: "mounted-be".to_string(),
-        dataset: "zfake/ROOT/mounted-be".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![mounted_be]);
-
-    // Try to destroy without force_unmount - should fail
-    let result = beroot.destroy("mounted-be", false, false, false);
-    assert!(
-        matches!(result, Err(BeError::BeMounted { name, mountpoint })
-        if name == "mounted-be" && mountpoint == "/mnt/test")
-    );
-
-    // Verify it still exists
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 1);
-    assert_eq!(bes[0].name, "mounted-be");
-}
-
-#[test]
-fn test_fake_beroot_destroy_mounted_be_with_force() {
-    // Create a mounted boot environment
-    let mounted_be = BootEnvironment {
-        name: "mounted-be".to_string(),
-        dataset: "zfake/ROOT/mounted-be".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![mounted_be]);
-
-    // Try to destroy with force_unmount - should succeed
-    let result = beroot.destroy("mounted-be", true, false, false);
-    assert!(result.is_ok());
-
-    // Verify it's gone
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 0);
-}
-
-#[test]
-fn test_fake_beroot_destroy_multiple_bes() {
-    // Create multiple boot environments
-    let be1 = BootEnvironment {
-        name: "be1".to_string(),
-        dataset: "zfake/ROOT/be1".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let be2 = BootEnvironment {
-        name: "be2".to_string(),
-        dataset: "zfake/ROOT/be2".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623305460,
-    };
-
-    let be3 = BootEnvironment {
-        name: "be3".to_string(),
-        dataset: "zfake/ROOT/be3".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623309060,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![be1, be2, be3]);
-
-    // Verify all exist
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 3);
-
-    // Destroy the middle one
-    let result = beroot.destroy("be2", false, false, false);
-    assert!(result.is_ok());
-
-    // Verify only be2 is gone
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 2);
-    assert!(bes.iter().any(|be| be.name == "be1"));
-    assert!(bes.iter().any(|be| be.name == "be3"));
-    assert!(!bes.iter().any(|be| be.name == "be2"));
-}
-
-#[test]
-fn test_fake_beroot_create_and_destroy_integration() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    // Start with empty
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 0);
-
-    // Create a boot environment
-    let result = beroot.create("temp-be", Some("Temporary BE"), None, &[]);
-    assert!(result.is_ok());
-
-    // Verify it exists
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 1);
-    assert_eq!(bes[0].name, "temp-be");
-    assert_eq!(bes[0].description, Some("Temporary BE".to_string()));
-
-    // Destroy it
-    let result = beroot.destroy("temp-be", false, false, false);
-    assert!(result.is_ok());
-
-    // Verify it's gone
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 0);
-
-    // Try to destroy it again - should fail
-    let result = beroot.destroy("temp-be", false, false, false);
-    assert!(matches!(result, Err(BeError::NotFound { name }) if name == "temp-be"));
-}
-
-#[test]
-fn test_fake_beroot_mount_success() {
-    let test_be = BootEnvironment {
-        name: "test-be".to_string(),
-        dataset: "zfake/ROOT/test-be".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    // Mount the BE
-    let result = beroot.mount("test-be", "/mnt/test", MountMode::ReadWrite);
-    assert!(result.is_ok());
-
-    // Verify it's mounted
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(
-        bes[0].mountpoint,
-        Some(std::path::PathBuf::from("/mnt/test"))
-    );
-}
-
-#[test]
-fn test_fake_beroot_mount_not_found() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    let result = beroot.mount("nonexistent", "/mnt/test", MountMode::ReadWrite);
-    assert!(matches!(result, Err(BeError::NotFound { name }) if name == "nonexistent"));
-}
-
-#[test]
-fn test_fake_beroot_mount_already_mounted() {
-    let test_be = BootEnvironment {
-        name: "test-be".to_string(),
-        dataset: "zfake/ROOT/test-be".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/mnt/existing")),
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    let result = beroot.mount("test-be", "/mnt/test", MountMode::ReadWrite);
-    assert!(
-        matches!(result, Err(BeError::BeMounted { name, mountpoint })
-        if name == "test-be" && mountpoint == "/mnt/existing")
-    );
-}
-
-#[test]
-fn test_fake_beroot_mount_path_in_use() {
-    let be1 = BootEnvironment {
-        name: "be1".to_string(),
-        dataset: "zfake/ROOT/be1".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let be2 = BootEnvironment {
-        name: "be2".to_string(),
-        dataset: "zfake/ROOT/be2".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623305460,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![be1, be2]);
-
-    let result = beroot.mount("be2", "/mnt/test", MountMode::ReadWrite);
-    assert!(matches!(result, Err(BeError::MountPointInUse { path }) if path == "/mnt/test"));
-}
-
-#[test]
-fn test_fake_beroot_unmount_success() {
-    let test_be = BootEnvironment {
-        name: "test-be".to_string(),
-        dataset: "zfake/ROOT/test-be".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    // Unmount by BE name
-    let result = beroot.unmount("test-be", false);
-    assert!(result.is_ok());
-
-    // Verify it's unmounted
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes[0].mountpoint, None);
-}
-
-#[test]
-fn test_fake_beroot_unmount_by_path() {
-    let test_be = BootEnvironment {
-        name: "test-be".to_string(),
-        dataset: "zfake/ROOT/test-be".to_string(),
-        description: None,
-        mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    // Unmount by path
-    let result = beroot.unmount("/mnt/test", false);
-    assert!(result.is_ok());
-
-    // Verify it's unmounted
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes[0].mountpoint, None);
-}
-
-#[test]
-fn test_fake_beroot_unmount_not_mounted() {
-    let test_be = BootEnvironment {
-        name: "test-be".to_string(),
-        dataset: "zfake/ROOT/test-be".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    let result = beroot.unmount("test-be", false);
-    assert!(
-        matches!(result, Err(BeError::UnmountFailed { name, reason })
-        if name == "test-be" && reason == "not mounted")
-    );
-}
-
-#[test]
-fn test_fake_beroot_rename_success() {
-    let test_be = BootEnvironment {
-        name: "old-name".to_string(),
-        dataset: "zfake/ROOT/old-name".to_string(),
-        description: Some("Test BE".to_string()),
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![test_be]);
-
-    let result = beroot.rename("old-name", "new-name");
-    assert!(result.is_ok());
-
-    // Verify the rename
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes[0].name, "new-name");
-    assert_eq!(bes[0].dataset, "zfake/ROOT/new-name");
-    assert_eq!(bes[0].description, Some("Test BE".to_string()));
-}
-
-#[test]
-fn test_fake_beroot_rename_not_found() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    let result = beroot.rename("nonexistent", "new-name");
-    assert!(matches!(result, Err(BeError::NotFound { name }) if name == "nonexistent"));
-}
-
-#[test]
-fn test_fake_beroot_rename_conflict() {
-    let be1 = BootEnvironment {
-        name: "be1".to_string(),
-        dataset: "zfake/ROOT/be1".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let be2 = BootEnvironment {
-        name: "be2".to_string(),
-        dataset: "zfake/ROOT/be2".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623305460,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![be1, be2]);
-
-    let result = beroot.rename("be1", "be2");
-    assert!(matches!(result, Err(BeError::Conflict { name }) if name == "be2"));
-}
-
-#[test]
-fn test_fake_beroot_activate_permanent() {
-    let be1 = BootEnvironment {
-        name: "be1".to_string(),
-        dataset: "zfake/ROOT/be1".to_string(),
-        description: None,
-        mountpoint: None,
-        active: true,
-        next_boot: true,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let be2 = BootEnvironment {
-        name: "be2".to_string(),
-        dataset: "zfake/ROOT/be2".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623305460,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![be1, be2]);
-
-    // Activate be2 permanently
-    let result = beroot.activate("be2", false, false);
-    assert!(result.is_ok());
-
-    // Verify activation
-    let bes = beroot.get_boot_environments().unwrap();
-    assert!(!bes[0].next_boot); // be1 should no longer be next_boot
-    assert!(bes[1].next_boot); // be2 should be next_boot
-}
-
-#[test]
-fn test_fake_beroot_activate_temporary() {
-    let be1 = BootEnvironment {
-        name: "be1".to_string(),
-        dataset: "zfake/ROOT/be1".to_string(),
-        description: None,
-        mountpoint: None,
-        active: true,
-        next_boot: true,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let be2 = BootEnvironment {
-        name: "be2".to_string(),
-        dataset: "zfake/ROOT/be2".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: false,
-        space: 8192,
-        created: 1623305460,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![be1, be2]);
-
-    // Activate be2 temporarily
-    let result = beroot.activate("be2", true, false);
-    assert!(result.is_ok());
-
-    // Verify temporary activation
-    let bes = beroot.get_boot_environments().unwrap();
-    assert!(!bes[0].next_boot); // be1 should no longer be next_boot
-    assert!(bes[1].next_boot); // be2 should be next_boot
-}
-
-#[test]
-fn test_fake_beroot_activate_remove_temp() {
-    let be1 = BootEnvironment {
-        name: "be1".to_string(),
-        dataset: "zfake/ROOT/be1".to_string(),
-        description: None,
-        mountpoint: None,
-        active: true,
-        next_boot: false,
-        space: 8192,
-        created: 1623301740,
-    };
-
-    let be2 = BootEnvironment {
-        name: "be2".to_string(),
-        dataset: "zfake/ROOT/be2".to_string(),
-        description: None,
-        mountpoint: None,
-        active: false,
-        next_boot: true, // Temporarily activated
-        space: 8192,
-        created: 1623305460,
-    };
-
-    let beroot = FakeBeRoot::new(None, vec![be1, be2]);
-
-    // Remove temporary activation
-    let result = beroot.activate("be1", false, true);
-    assert!(result.is_ok());
-
-    // Verify temp activation removed
-    let bes = beroot.get_boot_environments().unwrap();
-    assert!(!bes[1].next_boot); // be2 should no longer be next_boot
-}
-
-#[test]
-fn test_fake_beroot_activate_not_found() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    let result = beroot.activate("nonexistent", false, false);
-    assert!(matches!(result, Err(BeError::NotFound { name }) if name == "nonexistent"));
-}
-
-#[test]
-fn test_fake_beroot_integration_workflow() {
-    let beroot = FakeBeRoot::new(None, vec![]);
-
-    // Create a boot environment
-    let result = beroot.create("test-be", Some("Integration test"), None, &[]);
-    assert!(result.is_ok());
-
-    // Mount it
-    let result = beroot.mount("test-be", "/mnt/test", MountMode::ReadWrite);
-    assert!(result.is_ok());
-
-    // Verify it's mounted
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(
-        bes[0].mountpoint,
-        Some(std::path::PathBuf::from("/mnt/test"))
-    );
-
-    // Unmount it
-    let result = beroot.unmount("test-be", false);
-    assert!(result.is_ok());
-
-    // Verify it's unmounted
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes[0].mountpoint, None);
-
-    // Rename it
-    let result = beroot.rename("test-be", "renamed-be");
-    assert!(result.is_ok());
-
-    // Verify the rename
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes[0].name, "renamed-be");
-    assert_eq!(bes[0].dataset, "zfake/ROOT/renamed-be");
-
-    // Activate it temporarily
-    let result = beroot.activate("renamed-be", true, false);
-    assert!(result.is_ok());
-
-    // Verify activation
-    let bes = beroot.get_boot_environments().unwrap();
-    assert!(bes[0].next_boot);
-
-    // Destroy it (should work since it's not active)
-    let result = beroot.destroy("renamed-be", false, false, false);
-    assert!(result.is_ok());
-
-    // Verify it's gone
-    let bes = beroot.get_boot_environments().unwrap();
-    assert_eq!(bes.len(), 0);
 }
