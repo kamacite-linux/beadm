@@ -5,6 +5,14 @@ use clap::{Parser, Subcommand};
 #[command(about = "Boot Environment Administration")]
 #[command(version)]
 struct Cli {
+    /// Set the boot environment root
+    ///
+    /// The boot environment root is a dataset whose children are all boot
+    /// environments. Defaults to the parent dataset of the active boot
+    /// environment.
+    #[arg(short = 'r', long = "root", global = true, group = "Global options")]
+    beroot: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -142,6 +150,10 @@ enum Commands {
 
 fn main() {
     let cli = Cli::parse();
+
+    if let Some(beroot) = &cli.beroot {
+        println!("Using boot environment root: {}", beroot);
+    }
 
     match &cli.command {
         Some(Commands::Create {
