@@ -83,12 +83,17 @@ trait BeRoot {
 }
 
 struct NoopBeRoot {
-    root_path: Option<String>,
+    root: String,
 }
 
 impl NoopBeRoot {
     fn new(root_path: Option<String>) -> Self {
-        Self { root_path }
+        match root_path {
+            Some(p) => Self { root: p },
+            None => Self {
+                root: "zfake/ROOT".to_string(),
+            },
+        }
     }
 }
 
@@ -100,10 +105,6 @@ impl BeRoot for NoopBeRoot {
         clone_from: Option<&str>,
         properties: &[String],
     ) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
-
         // Demo error case: if BE name is "error", return an error
         if be_name == "error" {
             return Err(BeError::Conflict {
@@ -111,7 +112,7 @@ impl BeRoot for NoopBeRoot {
             });
         }
 
-        println!("Create command called with BE name: {}", be_name);
+        println!("Create boot environment: {}/{}", self.root, be_name);
         if let Some(desc) = description {
             println!("  - Description: {}", desc);
         }
@@ -132,10 +133,7 @@ impl BeRoot for NoopBeRoot {
         force_no_verify: bool,
         snapshots: bool,
     ) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
-        println!("Destroy command called with target: {}", target);
+        println!("Destroy boot environment: {}/{}", self.root, target);
         if force_unmount {
             println!("  - Force unmount: true");
         }
@@ -159,9 +157,6 @@ impl BeRoot for NoopBeRoot {
         sort_date: bool,
         sort_name: bool,
     ) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
         println!("List command called");
         if let Some(name) = be_name {
             println!("  - BE name: {}", name);
@@ -189,11 +184,9 @@ impl BeRoot for NoopBeRoot {
     }
 
     fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
         println!(
-            "Mount command called with BE: {} at {}:{}",
+            "Mount command called with BE: {}/{} at {}:{}",
+            self.root,
             be_name,
             mountpoint,
             if mode == MountMode::ReadWrite {
@@ -207,10 +200,7 @@ impl BeRoot for NoopBeRoot {
     }
 
     fn unmount(&self, target: &str, force: bool) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
-        println!("Unmount command called with target: {}", target);
+        println!("Unmount boot environment: {}/{}", self.root, target);
         if force {
             println!("  - Force: true");
         }
@@ -219,19 +209,16 @@ impl BeRoot for NoopBeRoot {
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
-        println!("Rename command called: {} -> {}", be_name, new_name);
+        println!(
+            "Rename boot environment: {}/{} -> {}/{}",
+            self.root, be_name, self.root, new_name
+        );
         println!("  (This is a no-op implementation)");
         Ok(())
     }
 
     fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
-        println!("Activate command called with BE: {}", be_name);
+        println!("Activate boot environment: {}/{}", self.root, be_name);
         if temporary {
             println!("  - Temporary: true");
         }
@@ -243,12 +230,9 @@ impl BeRoot for NoopBeRoot {
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
-        if let Some(root) = &self.root_path {
-            println!("Using boot environment root: {}", root);
-        }
         println!(
-            "Rollback command called: {} to snapshot {}",
-            be_name, snapshot
+            "Rollback boot environemtn: {}/{} to snapshot {}",
+            self.root, be_name, snapshot
         );
         println!("  (This is a no-op implementation)");
         Ok(())
