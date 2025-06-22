@@ -1,4 +1,200 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Whether a boot environment is mounted read-write (the default) or
+/// read-only.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum MountMode {
+    /// Mount read-write.
+    #[value(name = "rw")]
+    ReadWrite,
+    /// Mount read-only.
+    #[value(name = "ro")]
+    ReadOnly,
+}
+
+trait BeRoot {
+    fn create(
+        &self,
+        be_name: &str,
+        description: Option<&str>,
+        clone_from: Option<&str>,
+        properties: &[String],
+    );
+
+    fn destroy(&self, target: &str, force_unmount: bool, force_no_verify: bool, snapshots: bool);
+
+    fn list(
+        &self,
+        be_name: Option<&str>,
+        all: bool,
+        datasets: bool,
+        snapshots: bool,
+        parsable: bool,
+        sort_date: bool,
+        sort_name: bool,
+    );
+
+    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode);
+
+    fn unmount(&self, target: &str, force: bool);
+
+    fn rename(&self, be_name: &str, new_name: &str);
+
+    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool);
+
+    fn rollback(&self, be_name: &str, snapshot: &str);
+}
+
+struct NoopBeRoot {
+    root_path: Option<String>,
+}
+
+impl NoopBeRoot {
+    fn new(root_path: Option<String>) -> Self {
+        Self { root_path }
+    }
+}
+
+impl BeRoot for NoopBeRoot {
+    fn create(
+        &self,
+        be_name: &str,
+        description: Option<&str>,
+        clone_from: Option<&str>,
+        properties: &[String],
+    ) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!("Create command called with BE name: {}", be_name);
+        if let Some(desc) = description {
+            println!("  - Description: {}", desc);
+        }
+        if let Some(clone) = clone_from {
+            println!("  - Clone from: {}", clone);
+        }
+        if !properties.is_empty() {
+            println!("  - Properties: {:?}", properties);
+        }
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn destroy(&self, target: &str, force_unmount: bool, force_no_verify: bool, snapshots: bool) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!("Destroy command called with target: {}", target);
+        if force_unmount {
+            println!("  - Force unmount: true");
+        }
+        if force_no_verify {
+            println!("  - Force no verify: true");
+        }
+        if snapshots {
+            println!("  - Destroy snapshots: true");
+        }
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn list(
+        &self,
+        be_name: Option<&str>,
+        all: bool,
+        datasets: bool,
+        snapshots: bool,
+        parsable: bool,
+        sort_date: bool,
+        sort_name: bool,
+    ) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!("List command called");
+        if let Some(name) = be_name {
+            println!("  - BE name: {}", name);
+        }
+        if all {
+            println!("  - Show all: true");
+        }
+        if datasets {
+            println!("  - Show datasets: true");
+        }
+        if snapshots {
+            println!("  - Show snapshots: true");
+        }
+        if parsable {
+            println!("  - Parsable output: true");
+        }
+        if sort_date {
+            println!("  - Sort by date: true");
+        }
+        if sort_name {
+            println!("  - Sort by name: true");
+        }
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!(
+            "Mount command called with BE: {} at {}:{}",
+            be_name,
+            mountpoint,
+            if mode == MountMode::ReadWrite {
+                "rw"
+            } else {
+                "ro"
+            }
+        );
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn unmount(&self, target: &str, force: bool) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!("Unmount command called with target: {}", target);
+        if force {
+            println!("  - Force: true");
+        }
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn rename(&self, be_name: &str, new_name: &str) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!("Rename command called: {} -> {}", be_name, new_name);
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!("Activate command called with BE: {}", be_name);
+        if temporary {
+            println!("  - Temporary: true");
+        }
+        if remove_temp {
+            println!("  - Remove temp: true");
+        }
+        println!("  (This is a no-op implementation)");
+    }
+
+    fn rollback(&self, be_name: &str, snapshot: &str) {
+        if let Some(root) = &self.root_path {
+            println!("Using boot environment root: {}", root);
+        }
+        println!(
+            "Rollback command called: {} to snapshot {}",
+            be_name, snapshot
+        );
+        println!("  (This is a no-op implementation)");
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -12,6 +208,10 @@ struct Cli {
     /// environment.
     #[arg(short = 'r', long = "root", global = true, group = "Global options")]
     beroot: Option<String>,
+
+    /// Verbose output
+    #[arg(short = 'v', long = "verbose", global = true, group = "Global options")]
+    verbose: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -38,12 +238,6 @@ enum Commands {
         /// Set ZFS properties (property=value)
         #[arg(short = 'o', long)]
         property: Vec<String>,
-        /// Specify ZFS pool
-        #[arg(short = 'p', long)]
-        pool: Option<String>,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
     /// Destroy a boot environment
     Destroy {
@@ -58,9 +252,6 @@ enum Commands {
         /// Destroy all snapshots
         #[arg(short = 's')]
         snapshots: bool,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
     /// List boot environments
     List {
@@ -84,9 +275,6 @@ enum Commands {
         /// Sort by name
         #[arg(short = 'K')]
         sort_name: bool,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
     /// Mount a boot environment
     Mount {
@@ -95,11 +283,8 @@ enum Commands {
         /// Mount point
         mountpoint: String,
         /// Set read/write mode (ro or rw)
-        #[arg(short = 's', long)]
-        mode: Option<String>,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
+        #[arg(short = 's', long, default_value = "rw")]
+        mode: MountMode,
     },
     /// Unmount a boot environment
     Unmount {
@@ -108,9 +293,6 @@ enum Commands {
         /// Force unmount
         #[arg(short = 'f')]
         force: bool,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
     /// Rename a boot environment
     Rename {
@@ -118,9 +300,6 @@ enum Commands {
         be_name: String,
         /// New boot environment name
         new_name: String,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
     /// Activate a boot environment
     Activate {
@@ -132,9 +311,6 @@ enum Commands {
         /// Remove temporary activation
         #[arg(short = 'T')]
         remove_temp: bool,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
     /// Rollback to a snapshot
     Rollback {
@@ -142,17 +318,15 @@ enum Commands {
         be_name: String,
         /// Snapshot name
         snapshot: String,
-        /// Verbose output
-        #[arg(short = 'v', long)]
-        verbose: bool,
     },
 }
 
 fn main() {
     let cli = Cli::parse();
+    let beroot = NoopBeRoot::new(cli.beroot.clone());
 
-    if let Some(beroot) = &cli.beroot {
-        println!("Using boot environment root: {}", beroot);
+    if cli.verbose {
+        println!("Verbose mode enabled");
     }
 
     match &cli.command {
@@ -163,54 +337,25 @@ fn main() {
             description,
             clone_from,
             property,
-            pool,
-            verbose,
         }) => {
-            println!("Create command called with BE name: {}", be_name);
-            if *activate {
-                println!("  - Activate: true");
+            beroot.create(
+                be_name,
+                description.as_deref(),
+                clone_from.as_deref(),
+                property,
+            );
+
+            if *activate || *temp_activate {
+                beroot.activate(be_name, *temp_activate, false);
             }
-            if *temp_activate {
-                println!("  - Temporary activate: true");
-            }
-            if let Some(desc) = description {
-                println!("  - Description: {}", desc);
-            }
-            if let Some(clone) = clone_from {
-                println!("  - Clone from: {}", clone);
-            }
-            if !property.is_empty() {
-                println!("  - Properties: {:?}", property);
-            }
-            if let Some(p) = pool {
-                println!("  - Pool: {}", p);
-            }
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
         }
         Some(Commands::Destroy {
             target,
             force_unmount,
             force_no_verify,
             snapshots,
-            verbose,
         }) => {
-            println!("Destroy command called with target: {}", target);
-            if *force_unmount {
-                println!("  - Force unmount: true");
-            }
-            if *force_no_verify {
-                println!("  - Force no verify: true");
-            }
-            if *snapshots {
-                println!("  - Destroy snapshots: true");
-            }
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+            beroot.destroy(target, *force_unmount, *force_no_verify, *snapshots);
         }
         Some(Commands::List {
             be_name,
@@ -220,113 +365,48 @@ fn main() {
             parsable,
             sort_date,
             sort_name,
-            verbose,
         }) => {
-            println!("List command called");
-            if let Some(name) = be_name {
-                println!("  - BE name: {}", name);
-            }
-            if *all {
-                println!("  - Show all: true");
-            }
-            if *datasets {
-                println!("  - Show datasets: true");
-            }
-            if *snapshots {
-                println!("  - Show snapshots: true");
-            }
-            if *parsable {
-                println!("  - Parsable output: true");
-            }
-            if *sort_date {
-                println!("  - Sort by date: true");
-            }
-            if *sort_name {
-                println!("  - Sort by name: true");
-            }
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+            beroot.list(
+                be_name.as_deref(),
+                *all,
+                *datasets,
+                *snapshots,
+                *parsable,
+                *sort_date,
+                *sort_name,
+            );
         }
         Some(Commands::Mount {
             be_name,
             mountpoint,
             mode,
-            verbose,
         }) => {
-            println!(
-                "Mount command called with BE: {} at {}",
-                be_name, mountpoint
-            );
-            if let Some(m) = mode {
-                println!("  - Mode: {}", m);
-            }
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+            beroot.mount(be_name, mountpoint, *mode);
         }
-        Some(Commands::Unmount {
-            target,
-            force,
-            verbose,
-        }) => {
-            println!("Unmount command called with target: {}", target);
-            if *force {
-                println!("  - Force: true");
-            }
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+        Some(Commands::Unmount { target, force }) => {
+            beroot.unmount(target, *force);
         }
-        Some(Commands::Rename {
-            be_name,
-            new_name,
-            verbose,
-        }) => {
-            println!("Rename command called: {} -> {}", be_name, new_name);
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+        Some(Commands::Rename { be_name, new_name }) => {
+            beroot.rename(be_name, new_name);
         }
         Some(Commands::Activate {
             be_name,
             temporary,
             remove_temp,
-            verbose,
         }) => {
-            println!("Activate command called with BE: {}", be_name);
-            if *temporary {
-                println!("  - Temporary: true");
-            }
-            if *remove_temp {
-                println!("  - Remove temp: true");
-            }
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+            beroot.activate(be_name, *temporary, *remove_temp);
         }
-        Some(Commands::Rollback {
-            be_name,
-            snapshot,
-            verbose,
-        }) => {
-            println!(
-                "Rollback command called: {} to snapshot {}",
-                be_name, snapshot
-            );
-            if *verbose {
-                println!("  - Verbose mode enabled");
-            }
-            println!("  (This is a no-op implementation)");
+        Some(Commands::Rollback { be_name, snapshot }) => {
+            beroot.rollback(be_name, snapshot);
         }
         None => {
-            println!("List command (default when no subcommand provided)");
-            println!("  (This is a no-op implementation)");
+            beroot.list(None, false, false, false, false, false, false);
         }
     }
+}
+
+#[test]
+fn verify_cli() {
+    use clap::CommandFactory;
+    Cli::command().debug_assert();
 }
