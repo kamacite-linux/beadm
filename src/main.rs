@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+
+use chrono::{Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use thiserror::Error;
 
@@ -43,6 +46,23 @@ enum MountMode {
     ReadOnly,
 }
 
+struct BootEnvironment {
+    /// The name of this boot environment.
+    name: String,
+    /// A description for this boot environment, if any.
+    description: Option<String>,
+    /// If the boot environment is currently mounted, this is its mountpoint.
+    mountpoint: Option<PathBuf>,
+    /// Whether the system is currently booted into this boot environment.
+    active: bool,
+    /// Whether the system will reboot into this environment.
+    next_boot: bool,
+    /// Bytes on the filesystem associated with this boot environment.
+    space: u64,
+    /// Unix timestamp for when this boot environment was created.
+    created: i64,
+}
+
 trait BeRoot {
     fn create(
         &self,
@@ -60,17 +80,6 @@ trait BeRoot {
         snapshots: bool,
     ) -> Result<(), BeError>;
 
-    fn list(
-        &self,
-        be_name: Option<&str>,
-        all: bool,
-        datasets: bool,
-        snapshots: bool,
-        parsable: bool,
-        sort_date: bool,
-        sort_name: bool,
-    ) -> Result<(), BeError>;
-
     fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), BeError>;
 
     fn unmount(&self, target: &str, force: bool) -> Result<(), BeError>;
@@ -80,20 +89,44 @@ trait BeRoot {
     fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), BeError>;
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError>;
+
+    fn iter(&self) -> Box<dyn Iterator<Item = &BootEnvironment> + '_>;
 }
 
 struct NoopBeRoot {
     root: String,
+    sample_bes: Vec<BootEnvironment>,
 }
 
 impl NoopBeRoot {
     fn new(root_path: Option<String>) -> Self {
-        match root_path {
-            Some(p) => Self { root: p },
-            None => Self {
-                root: "zfake/ROOT".to_string(),
+        let root = match root_path {
+            Some(p) => p,
+            None => "zfake/ROOT".to_string(),
+        };
+
+        let sample_bes = vec![
+            BootEnvironment {
+                name: "default".to_string(),
+                description: None,
+                mountpoint: Some(std::path::PathBuf::from("/")),
+                active: true,
+                next_boot: true,
+                space: 950_000_000,  // ~906M
+                created: 1623301740, // Represents 2021-06-10 04:29
             },
-        }
+            BootEnvironment {
+                name: "alt".to_string(),
+                description: Some("Testing".to_string()),
+                mountpoint: None,
+                active: false,
+                next_boot: false,
+                space: 8192,         // 8K
+                created: 1623305460, // Represents 2021-06-10 05:11
+            },
+        ];
+
+        Self { root, sample_bes }
     }
 }
 
@@ -142,42 +175,6 @@ impl BeRoot for NoopBeRoot {
         }
         if snapshots {
             println!("  - Destroy snapshots: true");
-        }
-        println!("  (This is a no-op implementation)");
-        Ok(())
-    }
-
-    fn list(
-        &self,
-        be_name: Option<&str>,
-        all: bool,
-        datasets: bool,
-        snapshots: bool,
-        parsable: bool,
-        sort_date: bool,
-        sort_name: bool,
-    ) -> Result<(), BeError> {
-        println!("List command called");
-        if let Some(name) = be_name {
-            println!("  - BE name: {}", name);
-        }
-        if all {
-            println!("  - Show all: true");
-        }
-        if datasets {
-            println!("  - Show datasets: true");
-        }
-        if snapshots {
-            println!("  - Show snapshots: true");
-        }
-        if parsable {
-            println!("  - Parsable output: true");
-        }
-        if sort_date {
-            println!("  - Sort by date: true");
-        }
-        if sort_name {
-            println!("  - Sort by name: true");
         }
         println!("  (This is a no-op implementation)");
         Ok(())
@@ -237,6 +234,11 @@ impl BeRoot for NoopBeRoot {
         println!("  (This is a no-op implementation)");
         Ok(())
     }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = &BootEnvironment> + '_> {
+        // Return iterator over the stored sample boot environments
+        Box::new(self.sample_bes.iter())
+    }
 }
 
 #[derive(Parser)]
@@ -257,7 +259,7 @@ struct Cli {
     verbose: bool,
 
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -309,15 +311,15 @@ enum Commands {
         /// List snapshots
         #[arg(short = 's')]
         snapshots: bool,
-        /// Machine-parsable output
+        /// Omit headers and formatting, separate fields by a single tab
         #[arg(short = 'H')]
         parsable: bool,
-        /// Sort by date
-        #[arg(short = 'k')]
-        sort_date: bool,
-        /// Sort by name
+        /// Sort by field, ascending
+        #[arg(short = 'k', default_value = "date")]
+        sort_asc: SortField,
+        /// Sort by field, descending
         #[arg(short = 'K')]
-        sort_name: bool,
+        sort_des: Option<SortField>,
     },
     /// Mount a boot environment
     Mount {
@@ -364,6 +366,51 @@ enum Commands {
     },
 }
 
+/// Field to sort boot environments by when listing them.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum SortField {
+    /// Sort by name.
+    Name,
+    /// Sort by created date.
+    Date,
+    /// Sort by space.
+    Space,
+}
+
+fn format_active_flags(be: &BootEnvironment) -> Option<String> {
+    if !be.next_boot && !be.active {
+        return None;
+    }
+    let mut flags = String::new();
+    if be.next_boot {
+        flags.push('N');
+    }
+    if be.active {
+        flags.push('R');
+    }
+    Some(flags)
+}
+
+fn format_space(bytes: u64) -> String {
+    // TODO: libzfs has a utility for this we should use, if possible.
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{}K", bytes / 1024)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{}M", bytes / (1024 * 1024))
+    } else {
+        format!("{}G", bytes / (1024 * 1024 * 1024))
+    }
+}
+
+fn format_timestamp(timestamp: i64) -> String {
+    match Local.timestamp_opt(timestamp, 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+        _ => format!("{}", timestamp), // Fallback to raw timestamp if conversion fails
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let beroot = NoopBeRoot::new(cli.beroot.clone());
@@ -373,14 +420,14 @@ fn main() {
     }
 
     let result = match &cli.command {
-        Some(Commands::Create {
+        Commands::Create {
             be_name,
             activate,
             temp_activate,
             description,
             clone_from,
             property,
-        }) => {
+        } => {
             let result = beroot.create(
                 be_name,
                 description.as_deref(),
@@ -394,43 +441,142 @@ fn main() {
                 result
             }
         }
-        Some(Commands::Destroy {
+        Commands::Destroy {
             target,
             force_unmount,
             force_no_verify,
             snapshots,
-        }) => beroot.destroy(target, *force_unmount, *force_no_verify, *snapshots),
-        Some(Commands::List {
+        } => beroot.destroy(target, *force_unmount, *force_no_verify, *snapshots),
+        Commands::List {
             be_name,
-            all,
-            datasets,
-            snapshots,
+            all: _,
+            datasets: _,
+            snapshots: _,
             parsable,
-            sort_date,
-            sort_name,
-        }) => beroot.list(
-            be_name.as_deref(),
-            *all,
-            *datasets,
-            *snapshots,
-            *parsable,
-            *sort_date,
-            *sort_name,
-        ),
-        Some(Commands::Mount {
+            sort_asc,
+            sort_des,
+        } => {
+            // TODO: Implement -a, -s, -d.
+
+            let mut bes: Vec<&BootEnvironment> = beroot.iter().collect();
+
+            // Filter by name if specified
+            if let Some(filter_name) = be_name {
+                bes.retain(|be| be.name == *filter_name);
+            }
+
+            // TODO: This is a bit lazy; there should probably be an error if
+            // both -k and -K are specified.
+            let sort_field = sort_des.unwrap_or(*sort_asc);
+            match sort_field {
+                SortField::Date => {
+                    bes.sort_by_key(|be| be.created);
+                }
+                SortField::Name => {
+                    bes.sort_by(|a, b| a.name.cmp(&b.name));
+                }
+                SortField::Space => {
+                    bes.sort_by_key(|be| be.space);
+                }
+            }
+            if sort_des.is_some() {
+                bes.reverse();
+            }
+
+            if *parsable {
+                // "Machine-parsable" output: no headers, tab-separated fields.
+                //
+                // beadm from illumos uses semicolons for -H, but bectl from
+                // FreeBSD (sensibly) opts for tabs, which we follow. This
+                // also matches the behaviour of zfs list -H.
+                for be in bes {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}\t{}",
+                        be.name,
+                        match format_active_flags(be) {
+                            Some(s) => s,
+                            None => "".to_string(),
+                        },
+                        match &be.mountpoint {
+                            Some(m) => m.clone().display().to_string(),
+                            None => "".to_string(),
+                        },
+                        be.space,
+                        be.created,
+                        match &be.description {
+                            Some(d) => d.clone(),
+                            None => "".to_string(),
+                        }
+                    );
+                }
+            } else {
+                // Calculate dynamic column widths for fields that can be
+                // longer than their respective header.
+                let mut name_width = 4;
+                let mut mountpoint_width = 10;
+                let mut space_width = 5;
+                for be in &bes {
+                    name_width = name_width.max(be.name.len());
+                    if be.mountpoint.is_some() {
+                        mountpoint_width = mountpoint_width
+                            .max(be.mountpoint.clone().unwrap().display().to_string().len());
+                    }
+                    space_width = space_width.max(format_space(be.space).len());
+                }
+
+                // Tabular format with headers and dynamic alignment
+                println!(
+                    "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
+                    "NAME",
+                    "ACTIVE",
+                    "MOUNTPOINT",
+                    "SPACE",
+                    "CREATED",
+                    "DESCRIPTION",
+                    name_width = name_width,
+                    mountpoint_width = mountpoint_width,
+                    space_width = space_width
+                );
+                for be in bes {
+                    println!(
+                        "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
+                        be.name,
+                        match format_active_flags(be) {
+                            Some(s) => s,
+                            None => "-".to_string(),
+                        },
+                        match &be.mountpoint {
+                            Some(m) => m.clone().display().to_string(),
+                            None => "-".to_string(),
+                        },
+                        format_space(be.space),
+                        format_timestamp(be.created),
+                        match &be.description {
+                            Some(d) => d.clone(),
+                            None => "-".to_string(),
+                        },
+                        name_width = name_width,
+                        mountpoint_width = mountpoint_width,
+                        space_width = space_width
+                    );
+                }
+            }
+
+            Ok(())
+        }
+        Commands::Mount {
             be_name,
             mountpoint,
             mode,
-        }) => beroot.mount(be_name, mountpoint, *mode),
-        Some(Commands::Unmount { target, force }) => beroot.unmount(target, *force),
-        Some(Commands::Rename { be_name, new_name }) => beroot.rename(be_name, new_name),
-        Some(Commands::Activate {
+        } => beroot.mount(be_name, mountpoint, *mode),
+        Commands::Unmount { target, force } => beroot.unmount(target, *force),
+        Commands::Rename { be_name, new_name } => beroot.rename(be_name, new_name),
+        Commands::Activate {
             be_name,
             temporary,
             remove_temp,
-        }) => beroot.activate(be_name, *temporary, *remove_temp),
-        Some(Commands::Rollback { be_name, snapshot }) => beroot.rollback(be_name, snapshot),
-        None => beroot.list(None, false, false, false, false, false, false),
+        } => beroot.activate(be_name, *temporary, *remove_temp),
+        Commands::Rollback { be_name, snapshot } => beroot.rollback(be_name, snapshot),
     };
 
     if let Err(e) = result {
@@ -443,4 +589,33 @@ fn main() {
 fn verify_cli() {
     use clap::CommandFactory;
     Cli::command().debug_assert();
+}
+
+#[test]
+fn test_iter_method() {
+    let beroot = NoopBeRoot::new(Some("test/ROOT".to_string()));
+    let bes: Vec<&BootEnvironment> = beroot.iter().collect();
+
+    // The implementation now returns sample data for demonstration
+    assert_eq!(bes.len(), 2);
+    assert_eq!(bes[0].name, "default");
+    assert_eq!(bes[1].name, "alt");
+
+    // Verify we can collect it
+    let beroot2 = NoopBeRoot::new(None);
+    let bes2: Vec<&BootEnvironment> = beroot2.iter().collect();
+    assert_eq!(bes2.len(), 2);
+
+    // Verify iterator methods work
+    assert_eq!(beroot2.iter().count(), 2);
+
+    // Demonstrate how a real implementation might use the iterator
+    fn print_be_names(beroot: &dyn BeRoot) {
+        for be in beroot.iter() {
+            println!("Boot Environment: {}", be.name);
+        }
+    }
+
+    // This should print the sample boot environments
+    print_be_names(&beroot);
 }
