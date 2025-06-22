@@ -95,38 +95,16 @@ trait BeRoot {
 
 struct NoopBeRoot {
     root: String,
-    sample_bes: Vec<BootEnvironment>,
+    bes: Vec<BootEnvironment>,
 }
 
 impl NoopBeRoot {
-    fn new(root_path: Option<String>) -> Self {
+    fn new(root_path: Option<String>, bes: Vec<BootEnvironment>) -> Self {
         let root = match root_path {
             Some(p) => p,
             None => "zfake/ROOT".to_string(),
         };
-
-        let sample_bes = vec![
-            BootEnvironment {
-                name: "default".to_string(),
-                description: None,
-                mountpoint: Some(std::path::PathBuf::from("/")),
-                active: true,
-                next_boot: true,
-                space: 950_000_000,  // ~906M
-                created: 1623301740, // Represents 2021-06-10 04:29
-            },
-            BootEnvironment {
-                name: "alt".to_string(),
-                description: Some("Testing".to_string()),
-                mountpoint: None,
-                active: false,
-                next_boot: false,
-                space: 8192,         // 8K
-                created: 1623305460, // Represents 2021-06-10 05:11
-            },
-        ];
-
-        Self { root, sample_bes }
+        Self { root, bes }
     }
 }
 
@@ -237,7 +215,7 @@ impl BeRoot for NoopBeRoot {
 
     fn iter(&self) -> Box<dyn Iterator<Item = &BootEnvironment> + '_> {
         // Return iterator over the stored sample boot environments
-        Box::new(self.sample_bes.iter())
+        Box::new(self.bes.iter())
     }
 }
 
@@ -313,7 +291,7 @@ enum Commands {
         snapshots: bool,
         /// Omit headers and formatting, separate fields by a single tab
         #[arg(short = 'H')]
-        parsable: bool,
+        parseable: bool,
         /// Sort by field, ascending
         #[arg(short = 'k', default_value = "date")]
         sort_asc: SortField,
@@ -411,9 +389,158 @@ fn format_timestamp(timestamp: i64) -> String {
     }
 }
 
+/// Options to control printing boot environments with `beadm list`.
+struct PrintOptions<'a> {
+    be_name: &'a Option<String>,
+    sort_field: SortField,
+    descending: bool,
+    parseable: bool,
+}
+
+/// Prints a list of boot environments in the traditional `beadm list` format.
+fn print_boot_environments<T: BeRoot>(
+    root: &T,
+    mut writer: impl std::io::Write,
+    options: PrintOptions,
+) -> Result<(), BeError> {
+    let mut bes: Vec<&BootEnvironment> = root.iter().collect();
+
+    // Allow narrowing the output to a single boot environment (if it exists).
+    if let Some(filter_name) = options.be_name {
+        bes.retain(|be| be.name == *filter_name);
+    }
+
+    // Sorting.
+    match options.sort_field {
+        SortField::Date => {
+            bes.sort_by_key(|be| be.created);
+        }
+        SortField::Name => {
+            bes.sort_by(|a, b| a.name.cmp(&b.name));
+        }
+        SortField::Space => {
+            bes.sort_by_key(|be| be.space);
+        }
+    }
+    if options.descending {
+        bes.reverse();
+    }
+
+    // "Machine-parsable" output: no headers, tab-separated fields.
+    //
+    // beadm from illumos uses semicolons for -H, but bectl from FreeBSD
+    // (sensibly) opts for tabs, which we follow. This also matches the
+    // behaviour of zfs list -H.
+    if options.parseable {
+        for be in bes {
+            writeln!(
+                writer,
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                be.name,
+                match format_active_flags(be) {
+                    Some(s) => s,
+                    None => "".to_string(),
+                },
+                match &be.mountpoint {
+                    Some(m) => m.clone().display().to_string(),
+                    None => "".to_string(),
+                },
+                be.space,
+                be.created,
+                match &be.description {
+                    Some(d) => d.clone(),
+                    None => "".to_string(),
+                }
+            )?;
+        }
+        return Ok(());
+    }
+
+    // Calculate dynamic column widths for fields that can be longer than their
+    // respective header.
+    let mut name_width = 4;
+    let mut mountpoint_width = 10;
+    let mut space_width = 5;
+    for be in &bes {
+        name_width = name_width.max(be.name.len());
+        if be.mountpoint.is_some() {
+            mountpoint_width =
+                mountpoint_width.max(be.mountpoint.clone().unwrap().display().to_string().len());
+        }
+        space_width = space_width.max(format_space(be.space).len());
+    }
+
+    // The traditional 'beadm list' format, with minor differences:
+    //
+    // - We support a "description" column.
+    // - Headers are uppercase with no separator, similar to other zfs commands.
+    writeln!(
+        writer,
+        "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
+        "NAME",
+        "ACTIVE",
+        "MOUNTPOINT",
+        "SPACE",
+        "CREATED",
+        "DESCRIPTION",
+        name_width = name_width,
+        mountpoint_width = mountpoint_width,
+        space_width = space_width
+    )?;
+    for be in bes {
+        writeln!(
+            writer,
+            "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
+            be.name,
+            match format_active_flags(be) {
+                Some(s) => s,
+                None => "-".to_string(),
+            },
+            match &be.mountpoint {
+                Some(m) => m.clone().display().to_string(),
+                None => "-".to_string(),
+            },
+            format_space(be.space),
+            format_timestamp(be.created),
+            match &be.description {
+                Some(d) => d.clone(),
+                None => "-".to_string(),
+            },
+            name_width = name_width,
+            mountpoint_width = mountpoint_width,
+            space_width = space_width
+        )?;
+    }
+
+    Ok(())
+}
+
+fn sample_boot_environments() -> Vec<BootEnvironment> {
+    vec![
+        BootEnvironment {
+            name: "default".to_string(),
+            description: None,
+            mountpoint: Some(std::path::PathBuf::from("/")),
+            active: true,
+            next_boot: true,
+            space: 950_000_000,  // ~906M
+            created: 1623301740, // 2021-06-10 01:09
+        },
+        BootEnvironment {
+            name: "alt".to_string(),
+            description: Some("Testing".to_string()),
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            space: 8192,         // 8K
+            created: 1623305460, // 2021-06-10 02:11
+        },
+    ]
+}
+
 fn main() {
     let cli = Cli::parse();
-    let beroot = NoopBeRoot::new(cli.beroot.clone());
+    let beroot = NoopBeRoot::new(cli.beroot.clone(), sample_boot_environments());
 
     if cli.verbose {
         println!("Verbose mode enabled");
@@ -452,117 +579,23 @@ fn main() {
             all: _,
             datasets: _,
             snapshots: _,
-            parsable,
+            parseable,
             sort_asc,
             sort_des,
         } => {
             // TODO: Implement -a, -s, -d.
 
-            let mut bes: Vec<&BootEnvironment> = beroot.iter().collect();
-
-            // Filter by name if specified
-            if let Some(filter_name) = be_name {
-                bes.retain(|be| be.name == *filter_name);
-            }
-
             // TODO: This is a bit lazy; there should probably be an error if
             // both -k and -K are specified.
             let sort_field = sort_des.unwrap_or(*sort_asc);
-            match sort_field {
-                SortField::Date => {
-                    bes.sort_by_key(|be| be.created);
-                }
-                SortField::Name => {
-                    bes.sort_by(|a, b| a.name.cmp(&b.name));
-                }
-                SortField::Space => {
-                    bes.sort_by_key(|be| be.space);
-                }
-            }
-            if sort_des.is_some() {
-                bes.reverse();
-            }
+            let options = PrintOptions {
+                be_name,
+                sort_field,
+                descending: sort_des.is_some(),
+                parseable: *parseable,
+            };
 
-            if *parsable {
-                // "Machine-parsable" output: no headers, tab-separated fields.
-                //
-                // beadm from illumos uses semicolons for -H, but bectl from
-                // FreeBSD (sensibly) opts for tabs, which we follow. This
-                // also matches the behaviour of zfs list -H.
-                for be in bes {
-                    println!(
-                        "{}\t{}\t{}\t{}\t{}\t{}",
-                        be.name,
-                        match format_active_flags(be) {
-                            Some(s) => s,
-                            None => "".to_string(),
-                        },
-                        match &be.mountpoint {
-                            Some(m) => m.clone().display().to_string(),
-                            None => "".to_string(),
-                        },
-                        be.space,
-                        be.created,
-                        match &be.description {
-                            Some(d) => d.clone(),
-                            None => "".to_string(),
-                        }
-                    );
-                }
-            } else {
-                // Calculate dynamic column widths for fields that can be
-                // longer than their respective header.
-                let mut name_width = 4;
-                let mut mountpoint_width = 10;
-                let mut space_width = 5;
-                for be in &bes {
-                    name_width = name_width.max(be.name.len());
-                    if be.mountpoint.is_some() {
-                        mountpoint_width = mountpoint_width
-                            .max(be.mountpoint.clone().unwrap().display().to_string().len());
-                    }
-                    space_width = space_width.max(format_space(be.space).len());
-                }
-
-                // Tabular format with headers and dynamic alignment
-                println!(
-                    "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
-                    "NAME",
-                    "ACTIVE",
-                    "MOUNTPOINT",
-                    "SPACE",
-                    "CREATED",
-                    "DESCRIPTION",
-                    name_width = name_width,
-                    mountpoint_width = mountpoint_width,
-                    space_width = space_width
-                );
-                for be in bes {
-                    println!(
-                        "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
-                        be.name,
-                        match format_active_flags(be) {
-                            Some(s) => s,
-                            None => "-".to_string(),
-                        },
-                        match &be.mountpoint {
-                            Some(m) => m.clone().display().to_string(),
-                            None => "-".to_string(),
-                        },
-                        format_space(be.space),
-                        format_timestamp(be.created),
-                        match &be.description {
-                            Some(d) => d.clone(),
-                            None => "-".to_string(),
-                        },
-                        name_width = name_width,
-                        mountpoint_width = mountpoint_width,
-                        space_width = space_width
-                    );
-                }
-            }
-
-            Ok(())
+            print_boot_environments(&beroot, &mut std::io::stdout(), options)
         }
         Commands::Mount {
             be_name,
@@ -592,30 +625,90 @@ fn verify_cli() {
 }
 
 #[test]
-fn test_iter_method() {
-    let beroot = NoopBeRoot::new(Some("test/ROOT".to_string()));
-    let bes: Vec<&BootEnvironment> = beroot.iter().collect();
+fn test_print_boot_environments_output() {
+    let beroot = NoopBeRoot::new(None, sample_boot_environments());
+    let mut output = Vec::new();
+    let options = PrintOptions {
+        be_name: &None,
+        sort_field: SortField::Date,
+        descending: false,
+        parseable: false,
+    };
+    print_boot_environments(&beroot, &mut output, options).unwrap();
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        r"NAME     ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
+default  NR      /           905M   2021-06-10 01:09  -
+alt      -       -           8K     2021-06-10 02:11  Testing
+"
+    );
+}
 
-    // The implementation now returns sample data for demonstration
-    assert_eq!(bes.len(), 2);
-    assert_eq!(bes[0].name, "default");
-    assert_eq!(bes[1].name, "alt");
+#[test]
+fn test_print_boot_environments_parseable() {
+    let beroot = NoopBeRoot::new(None, sample_boot_environments());
+    let mut output = Vec::new();
+    print_boot_environments(
+        &beroot,
+        &mut output,
+        PrintOptions {
+            be_name: &None,
+            sort_field: SortField::Date,
+            descending: false,
+            parseable: true,
+        },
+    )
+    .unwrap();
 
-    // Verify we can collect it
-    let beroot2 = NoopBeRoot::new(None);
-    let bes2: Vec<&BootEnvironment> = beroot2.iter().collect();
-    assert_eq!(bes2.len(), 2);
+    let output_str = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "default\tNR\t/\t950000000\t1623301740\t");
+    assert_eq!(lines[1], "alt\t\t\t8192\t1623305460\tTesting");
+}
 
-    // Verify iterator methods work
-    assert_eq!(beroot2.iter().count(), 2);
+#[test]
+fn test_print_boot_environments_filtered() {
+    let beroot = NoopBeRoot::new(None, sample_boot_environments());
+    let mut output = Vec::new();
+    print_boot_environments(
+        &beroot,
+        &mut output,
+        PrintOptions {
+            be_name: &Some("default".to_string()),
+            sort_field: SortField::Date,
+            descending: false,
+            parseable: true,
+        },
+    )
+    .unwrap();
 
-    // Demonstrate how a real implementation might use the iterator
-    fn print_be_names(beroot: &dyn BeRoot) {
-        for be in beroot.iter() {
-            println!("Boot Environment: {}", be.name);
-        }
-    }
+    // Check that only default BE is shown.
+    let output_str = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert!(lines[0].starts_with("default"));
+    assert_eq!(lines.len(), 1);
+}
 
-    // This should print the sample boot environments
-    print_be_names(&beroot);
+#[test]
+fn test_print_boot_environments_sorting() {
+    let beroot = NoopBeRoot::new(None, sample_boot_environments());
+    let mut output = Vec::new();
+    print_boot_environments(
+        &beroot,
+        &mut output,
+        PrintOptions {
+            be_name: &None,
+            sort_field: SortField::Name,
+            descending: true,
+            parseable: true,
+        },
+    )
+    .unwrap();
+
+    // With name descending, "default" should come before "alt".
+    let output_str = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = output_str.lines().collect();
+    assert!(lines[0].starts_with("default"));
+    assert!(lines[1].starts_with("alt"));
 }
