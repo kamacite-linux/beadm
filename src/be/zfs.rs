@@ -471,18 +471,156 @@ impl Client for LibZfsClient {
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
-        // In a real implementation, this would iterate over ZFS datasets
-        // under the root and collect their properties
+        let root_path = CString::new(self.root.clone()).map_err(|_| Error::ZfsError {
+            message: "Root path contains null bytes".to_string(),
+        })?;
 
-        // For now, return a stub list
-        // Real implementation would use zfs_iter_children() callback
-        let mut bes = Vec::new();
+        // Open the root dataset
+        let root_zhp =
+            unsafe { zfs_open(self.libzfs_handle, root_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
+        if root_zhp.is_null() {
+            return Err(Error::ZfsError {
+                message: format!("Failed to open root dataset '{}'", self.root),
+            });
+        }
 
-        // Stub: just return the current BE if it exists
-        if let Ok(current) = self.get_current_be() {
-            if let Ok(be) = self.get_be_properties(&current) {
-                bes.push(be);
+        // Helper function to read a ZFS property as a string
+        fn get_zfs_property(zhp: *mut ZfsHandle, prop: std::os::raw::c_int) -> Option<String> {
+            use std::os::raw::c_char;
+            use std::ptr;
+            const PROP_BUF_SIZE: usize = 1024;
+            let mut buf = vec![0u8; PROP_BUF_SIZE];
+            let result = unsafe {
+                zfs_prop_get(
+                    zhp,
+                    prop,
+                    buf.as_mut_ptr() as *mut c_char,
+                    PROP_BUF_SIZE,
+                    ptr::null_mut(),
+                    0,
+                )
+            };
+            if result == 0 {
+                // Find the null terminator
+                if let Some(null_pos) = buf.iter().position(|&x| x == 0) {
+                    buf.truncate(null_pos);
+                }
+                String::from_utf8(buf).ok()
+            } else {
+                None
             }
+        }
+
+        // Helper function to parse ZFS size string (e.g., "123456789" bytes)
+        fn parse_zfs_size(size_str: &str) -> u64 {
+            size_str.parse().unwrap_or(0)
+        }
+
+        // Helper function to parse ZFS creation timestamp
+        fn parse_zfs_timestamp(timestamp_str: &str) -> i64 {
+            timestamp_str.parse().unwrap_or(0)
+        }
+
+        // Collect boot environments using iterator callback
+        let mut bes: Vec<BootEnvironment> = Vec::new();
+        let data_ptr = &mut bes as *mut Vec<BootEnvironment>;
+
+        extern "C" fn collect_be_callback(
+            zhp: *mut ZfsHandle,
+            data: *mut std::os::raw::c_void,
+        ) -> std::os::raw::c_int {
+            use std::ffi::CStr;
+            use std::path::PathBuf;
+            use std::ptr;
+            let bes = unsafe { &mut *(data as *mut Vec<BootEnvironment>) };
+
+            // Get the dataset name
+            let name_ptr = unsafe { zfs_get_name(zhp) };
+            if name_ptr.is_null() {
+                return 0; // Continue iteration
+            }
+
+            let full_name = match unsafe { CStr::from_ptr(name_ptr) }.to_str() {
+                Ok(name) => name,
+                Err(_) => return 0, // Continue iteration on error
+            };
+
+            // Extract just the BE name (last component after the root)
+            let be_name = if let Some(last_slash) = full_name.rfind('/') {
+                &full_name[last_slash + 1..]
+            } else {
+                full_name
+            };
+
+            // Get real ZFS properties
+            let space = get_zfs_property(zhp, ZFS_PROP_USED)
+                .map(|s| parse_zfs_size(&s))
+                .unwrap_or(0);
+
+            let created = get_zfs_property(zhp, ZFS_PROP_CREATION)
+                .map(|s| parse_zfs_timestamp(&s))
+                .unwrap_or(0);
+
+            // Check if mounted and get mountpoint
+            let mut mountpoint_ptr: *mut std::os::raw::c_char = ptr::null_mut();
+            let mountpoint = if unsafe {
+                zfs_is_mounted(zhp, &mut mountpoint_ptr as *mut *mut std::os::raw::c_char)
+            } != 0
+            {
+                if mountpoint_ptr.is_null() {
+                    None
+                } else {
+                    let mountpoint_str = unsafe { CStr::from_ptr(mountpoint_ptr) };
+                    let result = Some(PathBuf::from(mountpoint_str.to_string_lossy().into_owned()));
+                    // Free the C-allocated memory
+                    unsafe {
+                        libc::free(mountpoint_ptr as *mut libc::c_void);
+                    }
+                    result
+                }
+            } else {
+                None
+            };
+
+            // Create a BootEnvironment struct with real properties
+            let be = BootEnvironment {
+                name: be_name.to_string(),
+                path: full_name.to_string(),
+                description: None, // TODO: Read from user property beadm:description
+                mountpoint,
+                active: false,    // Will be set later by comparing with current BE
+                next_boot: false, // TODO: Read from boot configuration
+                boot_once: false, // TODO: Read from boot configuration
+                space,
+                created,
+            };
+
+            bes.push(be);
+            0 // Continue iteration
+        }
+
+        // Iterate over child datasets
+        let result = unsafe {
+            zfs_iter_children(
+                root_zhp,
+                collect_be_callback,
+                data_ptr as *mut std::os::raw::c_void,
+            )
+        };
+
+        unsafe { zfs_close(root_zhp) };
+
+        if result != 0 {
+            return Err(Error::ZfsError {
+                message: "Failed to iterate over boot environments".to_string(),
+            });
+        }
+
+        // Now populate the missing properties for each BE
+        let current_be = self.get_current_be().unwrap_or_default();
+        for be in bes.iter_mut() {
+            // Set active flag
+            be.active = be.name == current_be;
         }
 
         Ok(bes)
