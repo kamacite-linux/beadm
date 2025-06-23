@@ -2,7 +2,7 @@ use chrono::Utc;
 use std::cell::RefCell;
 
 use super::validation::validate_be_name;
-use super::{BootEnvironment, Client, Error, MountMode};
+use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
 /// A boot environment client populated with static data that operates
 /// entirely in-memory with no side effects.
@@ -61,7 +61,7 @@ impl Client for EmulatorClient {
 
         bes.push(BootEnvironment {
             name: be_name.to_string(),
-            dataset: format!("{}/{}", self.root, be_name),
+            path: format!("{}/{}", self.root, be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
             active: false,
@@ -215,7 +215,7 @@ impl Client for EmulatorClient {
 
         // Perform the rename
         bes[be_index].name = new_name.to_string();
-        bes[be_index].dataset = format!("{}/{}", self.root, new_name);
+        bes[be_index].path = format!("{}/{}", self.root, new_name);
 
         Ok(())
     }
@@ -270,13 +270,22 @@ impl Client for EmulatorClient {
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
         Ok(self.bes.borrow().clone())
     }
+
+    fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
+        if !self.bes.borrow().iter().any(|be| be.name == be_name) {
+            return Err(Error::NotFound {
+                name: be_name.to_string(),
+            });
+        }
+        Ok(sample_snapshots(be_name))
+    }
 }
 
 fn sample_boot_environments() -> Vec<BootEnvironment> {
     vec![
         BootEnvironment {
             name: "default".to_string(),
-            dataset: "zfake/ROOT/default".to_string(),
+            path: "zfake/ROOT/default".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/")),
             active: true,
@@ -286,7 +295,7 @@ fn sample_boot_environments() -> Vec<BootEnvironment> {
         },
         BootEnvironment {
             name: "alt".to_string(),
-            dataset: "zfake/ROOT/alt".to_string(),
+            path: "zfake/ROOT/alt".to_string(),
             description: Some("Testing".to_string()),
             mountpoint: None,
             active: false,
@@ -295,6 +304,32 @@ fn sample_boot_environments() -> Vec<BootEnvironment> {
             created: 1623305460, // 2021-06-10 02:11
         },
     ]
+}
+
+fn sample_snapshots(be_name: &str) -> Vec<Snapshot> {
+    match be_name {
+        "default" => vec![
+            Snapshot {
+                name: "default@2021-06-10-04:30".to_string(),
+                path: "zfake/ROOT/default@2021-06-10-04:30".to_string(),
+                space: 404_000,      // 404K
+                created: 1623303000, // 2021-06-10 04:30
+            },
+            Snapshot {
+                name: "default@2021-06-10-05:10".to_string(),
+                path: "zfake/ROOT/default@2021-06-10-05:10".to_string(),
+                space: 404_000,      // 404K
+                created: 1623305400, // 2021-06-10 05:10
+            },
+        ],
+        "alt" => vec![Snapshot {
+            name: "alt@backup".to_string(),
+            path: "zfake/ROOT/alt@backup".to_string(),
+            space: 1024,         // 1K
+            created: 1623306000, // 2021-06-10 05:06:40
+        }],
+        _ => vec![],
+    }
 }
 
 #[cfg(test)]
@@ -314,7 +349,7 @@ mod tests {
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].name, "test-be");
         assert_eq!(bes[0].description, Some("Test description".to_string()));
-        assert_eq!(bes[0].dataset, "zfake/ROOT/test-be");
+        assert_eq!(bes[0].path, "zfake/ROOT/test-be");
 
         // Test creating a duplicate should fail
         let result = client.create("test-be", None, None, &[]);
@@ -330,7 +365,7 @@ mod tests {
         // Create a test boot environment that can be destroyed
         let test_be = BootEnvironment {
             name: "destroyable".to_string(),
-            dataset: "zfake/ROOT/destroyable".to_string(),
+            path: "zfake/ROOT/destroyable".to_string(),
             description: Some("Test BE for destruction".to_string()),
             mountpoint: None,
             active: false,
@@ -367,7 +402,7 @@ mod tests {
         // Create an active boot environment
         let active_be = BootEnvironment {
             name: "active-be".to_string(),
-            dataset: "zfake/ROOT/active-be".to_string(),
+            path: "zfake/ROOT/active-be".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/")),
             active: true,
@@ -393,7 +428,7 @@ mod tests {
         // Create a mounted boot environment
         let mounted_be = BootEnvironment {
             name: "mounted-be".to_string(),
-            dataset: "zfake/ROOT/mounted-be".to_string(),
+            path: "zfake/ROOT/mounted-be".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -458,7 +493,7 @@ mod tests {
     fn test_emulated_mount_success() {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
-            dataset: "zfake/ROOT/test-be".to_string(),
+            path: "zfake/ROOT/test-be".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -492,7 +527,7 @@ mod tests {
     fn test_emulated_mount_already_mounted() {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
-            dataset: "zfake/ROOT/test-be".to_string(),
+            path: "zfake/ROOT/test-be".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/existing")),
             active: false,
@@ -510,7 +545,7 @@ mod tests {
     fn test_emulated_mount_path_in_use() {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
-            dataset: "zfake/ROOT/be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -521,7 +556,7 @@ mod tests {
 
         let be2 = BootEnvironment {
             name: "be2".to_string(),
-            dataset: "zfake/ROOT/be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -539,7 +574,7 @@ mod tests {
     fn test_emulated_unmount_success() {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
-            dataset: "zfake/ROOT/test-be".to_string(),
+            path: "zfake/ROOT/test-be".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -563,7 +598,7 @@ mod tests {
     fn test_emulated_unmount_by_path() {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
-            dataset: "zfake/ROOT/test-be".to_string(),
+            path: "zfake/ROOT/test-be".to_string(),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -587,7 +622,7 @@ mod tests {
     fn test_emulated_unmount_not_mounted() {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
-            dataset: "zfake/ROOT/test-be".to_string(),
+            path: "zfake/ROOT/test-be".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -607,7 +642,7 @@ mod tests {
     fn test_emulated_rename_success() {
         let test_be = BootEnvironment {
             name: "old-name".to_string(),
-            dataset: "zfake/ROOT/old-name".to_string(),
+            path: "zfake/ROOT/old-name".to_string(),
             description: Some("Test BE".to_string()),
             mountpoint: None,
             active: false,
@@ -624,7 +659,7 @@ mod tests {
         // Verify the rename
         let bes = client.get_boot_environments().unwrap();
         assert_eq!(bes[0].name, "new-name");
-        assert_eq!(bes[0].dataset, "zfake/ROOT/new-name");
+        assert_eq!(bes[0].path, "zfake/ROOT/new-name");
         assert_eq!(bes[0].description, Some("Test BE".to_string()));
     }
 
@@ -639,7 +674,7 @@ mod tests {
     fn test_emulated_rename_conflict() {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
-            dataset: "zfake/ROOT/be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -650,7 +685,7 @@ mod tests {
 
         let be2 = BootEnvironment {
             name: "be2".to_string(),
-            dataset: "zfake/ROOT/be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -669,7 +704,7 @@ mod tests {
     fn test_emulated_activate_permanent() {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
-            dataset: "zfake/ROOT/be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
             description: None,
             mountpoint: None,
             active: true,
@@ -680,7 +715,7 @@ mod tests {
 
         let be2 = BootEnvironment {
             name: "be2".to_string(),
-            dataset: "zfake/ROOT/be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -705,7 +740,7 @@ mod tests {
     fn test_emulated_activate_temporary() {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
-            dataset: "zfake/ROOT/be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
             description: None,
             mountpoint: None,
             active: true,
@@ -716,7 +751,7 @@ mod tests {
 
         let be2 = BootEnvironment {
             name: "be2".to_string(),
-            dataset: "zfake/ROOT/be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -741,7 +776,7 @@ mod tests {
     fn test_emulated_activate_remove_temp() {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
-            dataset: "zfake/ROOT/be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
             description: None,
             mountpoint: None,
             active: true,
@@ -752,7 +787,7 @@ mod tests {
 
         let be2 = BootEnvironment {
             name: "be2".to_string(),
-            dataset: "zfake/ROOT/be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
             description: None,
             mountpoint: None,
             active: false,
@@ -824,7 +859,7 @@ mod tests {
         // Verify the rename
         let bes = client.get_boot_environments().unwrap();
         assert_eq!(bes[0].name, "renamed-be");
-        assert_eq!(bes[0].dataset, "zfake/ROOT/renamed-be");
+        assert_eq!(bes[0].path, "zfake/ROOT/renamed-be");
 
         // Activate it temporarily
         let result = client.activate("renamed-be", true, false);
@@ -841,5 +876,53 @@ mod tests {
         // Verify it's gone
         let bes = client.get_boot_environments().unwrap();
         assert_eq!(bes.len(), 0);
+    }
+
+    #[test]
+    fn test_emulated_snapshots_success() {
+        let client = EmulatorClient::sampled();
+
+        // Get snapshots for default BE
+        let snapshots = client.get_snapshots("default").unwrap();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].name, "default@2021-06-10-04:30");
+        assert_eq!(snapshots[0].space, 404_000);
+        assert_eq!(snapshots[0].created, 1623303000);
+        assert_eq!(snapshots[1].name, "default@2021-06-10-05:10");
+        assert_eq!(snapshots[1].space, 404_000);
+        assert_eq!(snapshots[1].created, 1623305400);
+
+        // Get snapshots for alt BE
+        let snapshots = client.get_snapshots("alt").unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].name, "alt@backup");
+        assert_eq!(snapshots[0].space, 1024);
+        assert_eq!(snapshots[0].created, 1623306000);
+    }
+
+    #[test]
+    fn test_emulated_snapshots_not_found() {
+        let client = EmulatorClient::sampled();
+        let result = client.get_snapshots("nonexistent");
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+    }
+
+    #[test]
+    fn test_emulated_snapshots_empty() {
+        // Create a client with a BE that has no snapshots
+        let test_be = BootEnvironment {
+            name: "no-snapshots".to_string(),
+            path: "zfake/ROOT/no-snapshots".to_string(),
+            description: None,
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let client = EmulatorClient::new(vec![test_be]);
+        let snapshots = client.get_snapshots("no-snapshots").unwrap();
+        assert_eq!(snapshots.len(), 0);
     }
 }

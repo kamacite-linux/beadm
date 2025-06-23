@@ -54,9 +54,9 @@ pub enum MountMode {
 pub struct BootEnvironment {
     /// The name of this boot environment.
     pub name: String,
-    /// The dataset backing this boot environment.
+    /// The ZFS dataset path (e.g., `zroot/ROOT/default`).
     #[allow(dead_code)]
-    pub dataset: String,
+    pub path: String,
     /// A description for this boot environment, if any.
     pub description: Option<String>,
     /// If the boot environment is currently mounted, this is its mountpoint.
@@ -68,6 +68,19 @@ pub struct BootEnvironment {
     /// Bytes on the filesystem associated with this boot environment.
     pub space: u64,
     /// Unix timestamp for when this boot environment was created.
+    pub created: i64,
+}
+
+#[derive(Clone)]
+pub struct Snapshot {
+    /// The name of this snapshot (e.g., `default@snapshot`).
+    pub name: String,
+    /// The ZFS snapshot path (e.g., `zroot/ROOT/default@snapshot`).
+    #[allow(dead_code)]
+    pub path: String,
+    /// Bytes used by this snapshot.
+    pub space: u64,
+    /// Unix timestamp for when this snapshot was created.
     pub created: i64,
 }
 
@@ -100,4 +113,7 @@ pub trait Client {
 
     /// Get a snapshot of the boot environments.
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error>;
+
+    /// Get snapshots for a specific boot environment.
+    fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error>;
 }

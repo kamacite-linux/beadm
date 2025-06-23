@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod be;
 
 use be::mock::EmulatorClient;
-use be::{BootEnvironment, Client, Error, MountMode};
+use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -142,6 +142,60 @@ enum SortField {
     Space,
 }
 
+/// A row in `beadm list` output, either a boot environment or a snapshot.
+#[derive(Clone)]
+enum ListRow {
+    BootEnvironment(BootEnvironment),
+    Snapshot(Snapshot),
+}
+
+impl ListRow {
+    fn name(&self) -> &str {
+        match self {
+            ListRow::BootEnvironment(be) => &be.name,
+            ListRow::Snapshot(snapshot) => &snapshot.name,
+        }
+    }
+
+    fn space(&self) -> u64 {
+        match self {
+            ListRow::BootEnvironment(be) => be.space,
+            ListRow::Snapshot(snapshot) => snapshot.space,
+        }
+    }
+
+    fn created(&self) -> i64 {
+        match self {
+            ListRow::BootEnvironment(be) => be.created,
+            ListRow::Snapshot(snapshot) => snapshot.created,
+        }
+    }
+
+    fn active_flags(&self) -> Option<String> {
+        match self {
+            ListRow::BootEnvironment(be) => format_active_flags(be),
+            ListRow::Snapshot(_) => None,
+        }
+    }
+
+    fn mountpoint(&self) -> Option<String> {
+        match self {
+            ListRow::BootEnvironment(be) => match be.mountpoint.as_ref() {
+                Some(m) => Some(m.display().to_string()),
+                None => None,
+            },
+            ListRow::Snapshot(_) => None,
+        }
+    }
+
+    fn description(&self) -> Option<&str> {
+        match self {
+            ListRow::BootEnvironment(be) => be.description.as_deref(),
+            ListRow::Snapshot(_) => None,
+        }
+    }
+}
+
 fn format_active_flags(be: &BootEnvironment) -> Option<String> {
     if !be.next_boot && !be.active {
         return None;
@@ -182,6 +236,7 @@ struct PrintOptions<'a> {
     sort_field: SortField,
     descending: bool,
     parseable: bool,
+    snapshots: bool,
 }
 
 /// Prints a list of boot environments in the traditional `beadm list` format.
@@ -197,20 +252,33 @@ fn print_boot_environments<T: Client>(
         bes.retain(|be| be.name == *filter_name);
     }
 
+    // Convert boot environments to rows.
+    let mut rows: Vec<ListRow> = bes.into_iter().map(ListRow::BootEnvironment).collect();
+
+    // If snapshots are requested, collect and add them to the list
+    if options.snapshots {
+        for row in rows.clone() {
+            if let ListRow::BootEnvironment(ref be) = row {
+                let snapshots = root.get_snapshots(&be.name)?;
+                rows.extend(snapshots.into_iter().map(ListRow::Snapshot));
+            }
+        }
+    }
+
     // Sorting.
     match options.sort_field {
         SortField::Date => {
-            bes.sort_by_key(|be| be.created);
+            rows.sort_by_key(|row| row.created());
         }
         SortField::Name => {
-            bes.sort_by(|a, b| a.name.cmp(&b.name));
+            rows.sort_by(|a, b| a.name().cmp(b.name()));
         }
         SortField::Space => {
-            bes.sort_by_key(|be| be.space);
+            rows.sort_by_key(|row| row.space());
         }
     }
     if options.descending {
-        bes.reverse();
+        rows.reverse();
     }
 
     // "Machine-parsable" output: no headers, tab-separated fields.
@@ -219,25 +287,16 @@ fn print_boot_environments<T: Client>(
     // (sensibly) opts for tabs, which we follow. This also matches the
     // behaviour of zfs list -H.
     if options.parseable {
-        for be in bes {
+        for row in rows {
             writeln!(
                 writer,
                 "{}\t{}\t{}\t{}\t{}\t{}",
-                be.name,
-                match format_active_flags(&be) {
-                    Some(s) => s,
-                    None => "".to_string(),
-                },
-                match &be.mountpoint {
-                    Some(m) => m.clone().display().to_string(),
-                    None => "".to_string(),
-                },
-                be.space,
-                be.created,
-                match &be.description {
-                    Some(d) => d.clone(),
-                    None => "".to_string(),
-                }
+                row.name(),
+                row.active_flags().unwrap_or("".to_string()),
+                row.mountpoint().unwrap_or("".to_string()),
+                row.space(),
+                row.created(),
+                row.description().unwrap_or("")
             )?;
         }
         return Ok(());
@@ -248,13 +307,12 @@ fn print_boot_environments<T: Client>(
     let mut name_width = 4;
     let mut mountpoint_width = 10;
     let mut space_width = 5;
-    for be in &bes {
-        name_width = name_width.max(be.name.len());
-        if be.mountpoint.is_some() {
-            mountpoint_width =
-                mountpoint_width.max(be.mountpoint.clone().unwrap().display().to_string().len());
+    for row in &rows {
+        name_width = name_width.max(row.name().len());
+        if let Some(mountpoint) = row.mountpoint() {
+            mountpoint_width = mountpoint_width.max(mountpoint.len());
         }
-        space_width = space_width.max(format_space(be.space).len());
+        space_width = space_width.max(format_space(row.space()).len());
     }
 
     // The traditional 'beadm list' format, with minor differences:
@@ -274,25 +332,16 @@ fn print_boot_environments<T: Client>(
         mountpoint_width = mountpoint_width,
         space_width = space_width
     )?;
-    for be in bes {
+    for row in rows {
         writeln!(
             writer,
             "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
-            be.name,
-            match format_active_flags(&be) {
-                Some(s) => s,
-                None => "-".to_string(),
-            },
-            match &be.mountpoint {
-                Some(m) => m.clone().display().to_string(),
-                None => "-".to_string(),
-            },
-            format_space(be.space),
-            format_timestamp(be.created),
-            match &be.description {
-                Some(d) => d.clone(),
-                None => "-".to_string(),
-            },
+            row.name(),
+            row.active_flags().unwrap_or("-".to_string()),
+            row.mountpoint().unwrap_or("-".to_string()),
+            format_space(row.space()),
+            format_timestamp(row.created()),
+            row.description().unwrap_or("-"),
             name_width = name_width,
             mountpoint_width = mountpoint_width,
             space_width = space_width
@@ -342,12 +391,12 @@ fn main() {
             be_name,
             all: _,
             datasets: _,
-            snapshots: _,
+            snapshots,
             parseable,
             sort_asc,
             sort_des,
         } => {
-            // TODO: Implement -a, -s, -d.
+            // TODO: Implement -a, -d.
 
             // TODO: This is a bit lazy; there should probably be an error if
             // both -k and -K are specified.
@@ -357,6 +406,7 @@ fn main() {
                 sort_field,
                 descending: sort_des.is_some(),
                 parseable: *parseable,
+                snapshots: *snapshots,
             };
 
             print_boot_environments(&client, &mut std::io::stdout(), options)
@@ -401,6 +451,7 @@ mod tests {
             sort_field: SortField::Date,
             descending: false,
             parseable: false,
+            snapshots: false,
         };
         print_boot_environments(&client, &mut output, options).unwrap();
         assert_eq!(
@@ -424,6 +475,7 @@ alt      -       -           8K     2021-06-10 02:11  Testing
                 sort_field: SortField::Date,
                 descending: false,
                 parseable: true,
+                snapshots: false,
             },
         )
         .unwrap();
@@ -447,6 +499,7 @@ alt      -       -           8K     2021-06-10 02:11  Testing
                 sort_field: SortField::Date,
                 descending: false,
                 parseable: true,
+                snapshots: false,
             },
         )
         .unwrap();
@@ -470,6 +523,7 @@ alt      -       -           8K     2021-06-10 02:11  Testing
                 sort_field: SortField::Name,
                 descending: true,
                 parseable: true,
+                snapshots: false,
             },
         )
         .unwrap();
@@ -479,5 +533,63 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         let lines: Vec<&str> = output_str.lines().collect();
         assert!(lines[0].starts_with("default"));
         assert!(lines[1].starts_with("alt"));
+    }
+
+    #[test]
+    fn test_print_boot_environments_with_snapshots() {
+        let client = EmulatorClient::sampled();
+        let mut output = Vec::new();
+        print_boot_environments(
+            &client,
+            &mut output,
+            PrintOptions {
+                be_name: &None,
+                sort_field: SortField::Date,
+                descending: false,
+                parseable: false,
+                snapshots: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            r"NAME                      ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
+default                   NR      /           905M   2021-06-10 01:09  -
+default@2021-06-10-04:30  -       -           394K   2021-06-10 01:30  -
+default@2021-06-10-05:10  -       -           394K   2021-06-10 02:10  -
+alt                       -       -           8K     2021-06-10 02:11  Testing
+alt@backup                -       -           1K     2021-06-10 02:20  -
+"
+        );
+
+        output = Vec::new();
+        print_boot_environments(
+            &client,
+            &mut output,
+            PrintOptions {
+                be_name: &None,
+                sort_field: SortField::Date,
+                descending: false,
+                parseable: true,
+                snapshots: true,
+            },
+        )
+        .unwrap();
+
+        let output_str = String::from_utf8(output).unwrap();
+        let lines: Vec<&str> = output_str.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "default\tNR\t/\t950000000\t1623301740\t");
+        assert_eq!(
+            lines[1],
+            "default@2021-06-10-04:30\t\t\t404000\t1623303000\t"
+        );
+        assert_eq!(
+            lines[2],
+            "default@2021-06-10-05:10\t\t\t404000\t1623305400\t"
+        );
+        assert_eq!(lines[3], "alt\t\t\t8192\t1623305460\tTesting");
+        assert_eq!(lines[4], "alt@backup\t\t\t1024\t1623306000\t");
     }
 }
