@@ -4,6 +4,7 @@ use thiserror::Error as ThisError;
 
 pub mod mock;
 pub mod validation;
+pub mod zfs;
 
 #[derive(ThisError, Debug)]
 pub enum Error {
@@ -24,6 +25,9 @@ pub enum Error {
 
     #[error("Invalid boot environment name '{name}': {reason}")]
     InvalidName { name: String, reason: String },
+
+    #[error("Invalid path: '{path}'")]
+    InvalidPath { path: String },
 
     #[error("Boot environment name '{name}' is currently mounted at '{mountpoint}'")]
     BeMounted { name: String, mountpoint: String },
