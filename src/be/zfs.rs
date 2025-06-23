@@ -19,7 +19,7 @@ pub struct LibZfsClient {
 impl LibZfsClient {
     /// Create a new ZFS client with the specified boot environment root
     pub fn new(root: String) -> Result<Self, Error> {
-        let handle = libzfs_init();
+        let handle = unsafe { libzfs_init() };
         if handle.is_null() {
             return Err(Error::ZfsError {
                 message: "Failed to initialize libzfs".to_string(),
@@ -54,11 +54,11 @@ impl LibZfsClient {
             reason: "contains null bytes".to_string(),
         })?;
 
-        let zhp = zfs_open(self.libzfs_handle, c_path.as_ptr(), ZFS_TYPE_FILESYSTEM);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, c_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             Ok(false)
         } else {
-            zfs_close(zhp);
+            unsafe { zfs_close(zhp) };
             Ok(true)
         }
     }
@@ -71,7 +71,7 @@ impl LibZfsClient {
             reason: "contains null bytes".to_string(),
         })?;
 
-        let zhp = zfs_open(self.libzfs_handle, c_path.as_ptr(), ZFS_TYPE_FILESYSTEM);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, c_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
@@ -99,7 +99,7 @@ impl LibZfsClient {
             created: Utc::now().timestamp(), // Would read from ZFS 'creation' property
         };
 
-        zfs_close(zhp);
+        unsafe { zfs_close(zhp) };
         Ok(be)
     }
 }
@@ -107,7 +107,9 @@ impl LibZfsClient {
 impl Drop for LibZfsClient {
     fn drop(&mut self) {
         if !self.libzfs_handle.is_null() {
-            libzfs_fini(self.libzfs_handle);
+            unsafe {
+                libzfs_fini(self.libzfs_handle);
+            }
         }
     }
 }
@@ -145,12 +147,14 @@ impl Client for LibZfsClient {
         })?;
 
         // Create the ZFS filesystem
-        let result = zfs_create(
-            self.libzfs_handle,
-            c_path.as_ptr(),
-            ZFS_TYPE_FILESYSTEM,
-            ptr::null_mut(),
-        );
+        let result = unsafe {
+            zfs_create(
+                self.libzfs_handle,
+                c_path.as_ptr(),
+                ZFS_TYPE_FILESYSTEM,
+                ptr::null_mut(),
+            )
+        };
         if result != 0 {
             return Err(Error::ZfsError {
                 message: format!("Failed to create boot environment '{}'", be_name),
@@ -204,7 +208,7 @@ impl Client for LibZfsClient {
             reason: "contains null bytes".to_string(),
         })?;
 
-        let zhp = zfs_open(self.libzfs_handle, c_path.as_ptr(), 1);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, c_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             return Err(Error::ZfsError {
                 message: format!("Failed to open boot environment '{}'", target),
@@ -213,9 +217,9 @@ impl Client for LibZfsClient {
 
         // Unmount if force_unmount is set and it's mounted
         if force_unmount && be.mountpoint.is_some() {
-            let result = zfs_unmount(zhp, ptr::null(), 0);
+            let result = unsafe { zfs_unmount(zhp, ptr::null(), 0) };
             if result != 0 {
-                zfs_close(zhp);
+                unsafe { zfs_close(zhp) };
                 return Err(Error::UnmountFailed {
                     name: target.to_string(),
                     reason: "ZFS unmount failed".to_string(),
@@ -224,8 +228,8 @@ impl Client for LibZfsClient {
         }
 
         // Destroy the filesystem
-        let result = zfs_destroy(zhp, 0);
-        zfs_close(zhp);
+        let result = unsafe { zfs_destroy(zhp, 0) };
+        unsafe { zfs_close(zhp) };
 
         if result != 0 {
             return Err(Error::ZfsError {
@@ -246,7 +250,7 @@ impl Client for LibZfsClient {
         // Note: we know this is safe to unwrap because we've already validated
         // the name.
         let be_path = CString::new(format!("{}/{}", self.root, be_name)).unwrap();
-        let zhp = zfs_open(self.libzfs_handle, be_path.as_ptr(), ZFS_TYPE_FILESYSTEM);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, be_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
@@ -255,7 +259,9 @@ impl Client for LibZfsClient {
 
         // Check if it's already mounted.
         let mut mountpoint_ptr: *mut std::os::raw::c_char = ptr::null_mut();
-        if zfs_is_mounted(zhp, &mut mountpoint_ptr as *mut *mut std::os::raw::c_char) {
+        if unsafe { zfs_is_mounted(zhp, &mut mountpoint_ptr as *mut *mut std::os::raw::c_char) }
+            != 0
+        {
             let mountpoint = if mountpoint_ptr.is_null() {
                 "unknown".to_string() // Unclear how this could ever happen, panic instead?
             } else {
@@ -266,7 +272,7 @@ impl Client for LibZfsClient {
                 }
                 mountpoint_str.to_string_lossy().into_owned()
             };
-            zfs_close(zhp);
+            unsafe { zfs_close(zhp) };
             return Err(Error::BeMounted {
                 name: be_name.to_string(),
                 mountpoint,
@@ -274,8 +280,8 @@ impl Client for LibZfsClient {
         }
 
         // TODO: Support recursively mounting child datasets.
-        let result = zfs_mount_at(zhp, ptr::null(), 0, c_mountpoint.as_ptr());
-        zfs_close(zhp);
+        let result = unsafe { zfs_mount_at(zhp, ptr::null(), 0, c_mountpoint.as_ptr()) };
+        unsafe { zfs_close(zhp) };
 
         // TODO: zfs_mount_at() sets regular ELOOP, ENOENT, ENOTDIR, EPERM,
         // EBUSY via errno. We should convert these to the relevant errors
@@ -295,14 +301,14 @@ impl Client for LibZfsClient {
         // Note: we know this is safe to unwrap because we've already validated
         // the name.
         let be_path = CString::new(format!("{}/{}", self.root, be_name)).unwrap();
-        let zhp = zfs_open(self.libzfs_handle, be_path.as_ptr(), ZFS_TYPE_FILESYSTEM);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, be_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
             });
         }
 
-        if !zfs_is_mounted(zhp, ptr::null_mut()) {
+        if unsafe { zfs_is_mounted(zhp, ptr::null_mut()) } == 0 {
             return Ok(());
         }
 
@@ -310,8 +316,8 @@ impl Client for LibZfsClient {
         let flags = if force { 1 } else { 0 };
 
         // TODO: Support recursively unmounting child datasets.
-        let result = zfs_unmount(zhp, ptr::null(), flags);
-        zfs_close(zhp);
+        let result = unsafe { zfs_unmount(zhp, ptr::null(), flags) };
+        unsafe { zfs_close(zhp) };
 
         // TODO: Handle EBUSY set by zfs_unmount() above.
         if result != 0 {
@@ -340,23 +346,25 @@ impl Client for LibZfsClient {
         let old_path = CString::new(format!("{}/{}", self.root, be_name)).unwrap();
         let new_path = CString::new(format!("{}/{}", self.root, new_name)).unwrap();
 
-        let zhp = zfs_open(self.libzfs_handle, old_path.as_ptr(), ZFS_TYPE_FILESYSTEM);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, old_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
             });
         }
 
-        let result = zfs_rename(
-            zhp,
-            new_path.as_ptr(),
-            RenameFlags {
-                recursive: false,
-                nounmount: true, // Leave boot environment mounts in place.
-                forceunmount: false,
-            },
-        );
-        zfs_close(zhp);
+        let result = unsafe {
+            zfs_rename(
+                zhp,
+                new_path.as_ptr(),
+                RenameFlags {
+                    recursive: 0,
+                    nounmount: 1, // Leave boot environment mounts in place.
+                    forceunmount: 0,
+                },
+            )
+        };
+        unsafe { zfs_close(zhp) };
 
         if result != 0 {
             return Err(Error::ZfsError {
@@ -430,24 +438,25 @@ impl Client for LibZfsClient {
             reason: "contains null bytes".to_string(),
         })?;
 
-        let zhp = zfs_open(self.libzfs_handle, c_be_path.as_ptr(), 1);
+        let zhp = unsafe { zfs_open(self.libzfs_handle, c_be_path.as_ptr(), ZFS_TYPE_FILESYSTEM) };
         if zhp.is_null() {
             return Err(Error::ZfsError {
                 message: format!("Failed to open boot environment '{}'", be_name),
             });
         }
 
-        let snap_zhp = zfs_open(self.libzfs_handle, c_snap_path.as_ptr(), ZFS_TYPE_SNAPSHOT);
+        let snap_zhp =
+            unsafe { zfs_open(self.libzfs_handle, c_snap_path.as_ptr(), ZFS_TYPE_SNAPSHOT) };
         if snap_zhp.is_null() {
-            zfs_close(zhp);
+            unsafe { zfs_close(zhp) };
             return Err(Error::NotFound {
                 name: snapshot.to_string(),
             });
         }
 
-        let result = zfs_rollback(zhp, snap_zhp, 0);
-        zfs_close(zhp);
-        zfs_close(snap_zhp);
+        let result = unsafe { zfs_rollback(zhp, snap_zhp, 0) };
+        unsafe { zfs_close(zhp) };
+        unsafe { zfs_close(snap_zhp) };
 
         if result != 0 {
             return Err(Error::ZfsError {
@@ -495,141 +504,115 @@ impl Client for LibZfsClient {
     }
 }
 
-// Internal libzfs FFI bindings module
-// These are stubs that would normally link to the actual libzfs library
+// libzfs FFI bindings
 mod libzfs {
-    use std::os::raw::{c_char, c_int, c_void};
+    use std::os::raw::{c_char, c_int, c_uint, c_void};
 
     // Opaque handle types matching libzfs
     #[repr(C)]
     pub struct LibzfsHandle {
-        _opaque: c_void,
+        _opaque: [u8; 0],
     }
 
     #[repr(C)]
     pub struct ZfsHandle {
-        _opaque: c_void,
+        _opaque: [u8; 0],
     }
 
     #[repr(C)]
     pub struct ZpoolHandle {
-        _opaque: c_void,
+        _opaque: [u8; 0],
     }
 
-    // ZFS type constants
-    pub const ZFS_TYPE_FILESYSTEM: c_int = 1;
-    pub const ZFS_TYPE_SNAPSHOT: c_int = 2;
+    // ZFS type constants from sys/fs/zfs.h
+    pub const ZFS_TYPE_FILESYSTEM: c_int = 1 << 0;
+    pub const ZFS_TYPE_SNAPSHOT: c_int = 1 << 1;
+    pub const ZFS_TYPE_VOLUME: c_int = 1 << 2;
+    pub const ZFS_TYPE_POOL: c_int = 1 << 3;
+    pub const ZFS_TYPE_BOOKMARK: c_int = 1 << 4;
+    pub const ZFS_TYPE_VDEV: c_int = 1 << 5;
 
-    // Stub libzfs functions - these would be actual extern "C" bindings in practice
-    // DO NOT ATTEMPT to link to real libzfs
+    // ZFS property constants from libzfs.h
+    pub const ZFS_PROP_CREATION: c_int = 1;
+    pub const ZFS_PROP_USED: c_int = 2;
+    pub const ZFS_PROP_MOUNTPOINT: c_int = 13;
 
-    pub fn libzfs_init() -> *mut LibzfsHandle {
-        // Stub: return a fake handle
-        std::ptr::null_mut()
-    }
+    // ZFS property type (placeholder - we'd need to define proper enum)
+    pub type ZfsProp = c_int;
 
-    pub fn libzfs_fini(_hdl: *mut LibzfsHandle) {
-        // Stub: no-op
-    }
-
-    pub fn zfs_open(_hdl: *mut LibzfsHandle, _name: *const c_char, _type: c_int) -> *mut ZfsHandle {
-        // Stub: return a fake handle
-        std::ptr::null_mut()
-    }
-
-    pub fn zfs_close(_zhp: *mut ZfsHandle) {
-        // Stub: no-op
-    }
-
-    pub fn zfs_create(
-        _hdl: *mut LibzfsHandle,
-        _path: *const c_char,
-        _type: c_int,
-        _props: *mut c_void,
-    ) -> c_int {
-        // Stub: return success
-        0
-    }
-
-    pub fn zfs_destroy(_zhp: *mut ZfsHandle, _defer: c_int) -> c_int {
-        // Stub: return success
-        0
-    }
-
-    pub fn zfs_mount(_zhp: *mut ZfsHandle, _options: *const c_char, _flags: c_int) -> c_int {
-        // Stub: return success
-        0
-    }
-
-    pub fn zfs_is_mounted(_zhp: *mut ZfsHandle, _where: *mut *mut c_char) -> bool {
-        // Stub: return false (not mounted)
-        false
-    }
-
-    pub fn zfs_mount_at(
-        _zhp: *mut ZfsHandle,
-        _path: *const c_char,
-        _flags: c_int,
-        _fstype: *const c_char,
-    ) -> c_int {
-        // Stub: return success
-        0
-    }
-
-    pub fn zfs_unmount(_zhp: *mut ZfsHandle, _mountpoint: *const c_char, _flags: c_int) -> c_int {
-        // Stub: return success
-        0
-    }
-
+    // Rename flags structure matching libzfs.h
     #[repr(C)]
     pub struct RenameFlags {
-        pub recursive: bool,
-        pub nounmount: bool,
-        pub forceunmount: bool,
+        pub recursive: c_uint,    // : 1 bit field
+        pub nounmount: c_uint,    // : 1 bit field
+        pub forceunmount: c_uint, // : 1 bit field
     }
 
-    pub fn zfs_rename(_zhp: *mut ZfsHandle, _target: *const c_char, _flags: RenameFlags) -> c_int {
-        // Stub: return success
-        0
-    }
+    unsafe extern "C" {
+        // Library initialization
+        pub fn libzfs_init() -> *mut LibzfsHandle;
+        pub fn libzfs_fini(hdl: *mut LibzfsHandle);
 
-    pub fn zfs_rollback(_zhp: *mut ZfsHandle, _snap: *mut ZfsHandle, _force: c_int) -> c_int {
-        // Stub: return success
-        0
-    }
+        // Dataset handle management
+        pub fn zfs_open(
+            hdl: *mut LibzfsHandle,
+            name: *const c_char,
+            types: c_int,
+        ) -> *mut ZfsHandle;
+        pub fn zfs_close(zhp: *mut ZfsHandle);
 
-    pub fn zfs_iter_children(
-        _zhp: *mut ZfsHandle,
-        _func: extern "C" fn(*mut ZfsHandle, *mut c_void) -> c_int,
-        _data: *mut c_void,
-    ) -> c_int {
-        // Stub: return success (no children)
-        0
-    }
+        // Dataset operations
+        pub fn zfs_create(
+            hdl: *mut LibzfsHandle,
+            path: *const c_char,
+            typ: c_int,
+            props: *mut c_void,
+        ) -> c_int;
 
-    pub fn zfs_iter_snapshots(
-        _zhp: *mut ZfsHandle,
-        _func: extern "C" fn(*mut ZfsHandle, *mut c_void) -> c_int,
-        _data: *mut c_void,
-    ) -> c_int {
-        // Stub: return success (no snapshots)
-        0
-    }
+        pub fn zfs_destroy(zhp: *mut ZfsHandle, defer: c_int) -> c_int;
 
-    pub fn zfs_get_name(_zhp: *mut ZfsHandle) -> *const c_char {
-        // Stub: return a fake name
-        b"stub\0".as_ptr() as *const c_char
-    }
+        // Mount operations
+        pub fn zfs_mount(zhp: *mut ZfsHandle, options: *const c_char, flags: c_int) -> c_int;
+        pub fn zfs_mount_at(
+            zhp: *mut ZfsHandle,
+            path: *const c_char,
+            flags: c_int,
+            fstype: *const c_char,
+        ) -> c_int;
+        pub fn zfs_unmount(zhp: *mut ZfsHandle, mountpoint: *const c_char, flags: c_int) -> c_int;
+        pub fn zfs_is_mounted(zhp: *mut ZfsHandle, where_: *mut *mut c_char) -> c_int;
 
-    pub fn zfs_prop_get(
-        _zhp: *mut ZfsHandle,
-        _prop: c_int,
-        _buf: *mut c_char,
-        _len: usize,
-        _source: *mut c_int,
-        _literal: c_int,
-    ) -> c_int {
-        // Stub: return success with empty value
-        0
+        // Rename operation
+        pub fn zfs_rename(zhp: *mut ZfsHandle, target: *const c_char, flags: RenameFlags) -> c_int;
+
+        // Rollback operation
+        pub fn zfs_rollback(zhp: *mut ZfsHandle, snap: *mut ZfsHandle, force: c_int) -> c_int;
+
+        // Iterator functions
+        pub fn zfs_iter_children(
+            zhp: *mut ZfsHandle,
+            func: extern "C" fn(*mut ZfsHandle, *mut c_void) -> c_int,
+            data: *mut c_void,
+        ) -> c_int;
+
+        pub fn zfs_iter_snapshots(
+            zhp: *mut ZfsHandle,
+            simple: c_int,
+            func: extern "C" fn(*mut ZfsHandle, *mut c_void) -> c_int,
+            data: *mut c_void,
+            min_txg: u64,
+            max_txg: u64,
+        ) -> c_int;
+
+        // Property functions
+        pub fn zfs_get_name(zhp: *mut ZfsHandle) -> *const c_char;
+        pub fn zfs_prop_get(
+            zhp: *mut ZfsHandle,
+            prop: ZfsProp,
+            buf: *mut c_char,
+            len: usize,
+            source: *mut c_int,
+            literal: c_int,
+        ) -> c_int;
     }
 }
