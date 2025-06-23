@@ -197,7 +197,7 @@ impl ListRow {
 }
 
 fn format_active_flags(be: &BootEnvironment) -> Option<String> {
-    if !be.next_boot && !be.active {
+    if !be.next_boot && !be.active && !be.boot_once {
         return None;
     }
     let mut flags = String::new();
@@ -206,6 +206,9 @@ fn format_active_flags(be: &BootEnvironment) -> Option<String> {
     }
     if be.active {
         flags.push('R');
+    }
+    if be.boot_once {
+        flags.push('T');
     }
     Some(flags)
 }
@@ -376,7 +379,7 @@ fn main() {
             );
 
             if result.is_ok() && (*activate || *temp_activate) {
-                client.activate(be_name, *temp_activate, false)
+                client.activate(be_name, *temp_activate)
             } else {
                 result
             }
@@ -422,7 +425,13 @@ fn main() {
             be_name,
             temporary,
             remove_temp,
-        } => client.activate(be_name, *temporary, *remove_temp),
+        } => {
+            if *remove_temp {
+                client.deactivate(be_name)
+            } else {
+                client.activate(be_name, *temporary)
+            }
+        }
         Commands::Rollback { be_name, snapshot } => client.rollback(be_name, snapshot),
     };
 
@@ -533,6 +542,39 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         let lines: Vec<&str> = output_str.lines().collect();
         assert!(lines[0].starts_with("default"));
         assert!(lines[1].starts_with("alt"));
+    }
+
+    #[test]
+    fn test_print_boot_environments_with_boot_once_flag() {
+        let client = EmulatorClient::new(vec![BootEnvironment {
+            name: "temp-boot".to_string(),
+            path: "zfake/ROOT/temp-boot".to_string(),
+            description: None,
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: true, // This should yield the 'T' flag.
+            space: 8192,
+            created: 1623301740,
+        }]);
+        let mut output = Vec::new();
+        print_boot_environments(
+            &client,
+            &mut output,
+            PrintOptions {
+                be_name: &None,
+                sort_field: SortField::Date,
+                descending: false,
+                parseable: true,
+                snapshots: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "temp-boot\tT\t\t8192\t1623301740\t\n"
+        );
     }
 
     #[test]

@@ -66,6 +66,7 @@ impl Client for EmulatorClient {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192, // ZFS datasets consume 8K to start.
             created: Utc::now().timestamp(),
         });
@@ -220,7 +221,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), Error> {
+    fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
         let mut bes = self.bes.borrow_mut();
 
         // Find the target boot environment
@@ -233,28 +234,39 @@ impl Client for EmulatorClient {
             }
         };
 
-        if remove_temp {
-            // Clear temporary activation flags
+        if temporary {
+            // Set temporary activation (boot_once only)
+            // Only one BE can have boot_once=true, and no BE should have next_boot=true when using temporary activation
             for be in bes.iter_mut() {
-                if be.next_boot && !be.active {
-                    be.next_boot = false;
-                }
-            }
-        } else if temporary {
-            // Set temporary activation (next_boot only)
-            for be in bes.iter_mut() {
+                be.boot_once = false;
                 be.next_boot = false;
             }
-            bes[target_index].next_boot = true;
+            bes[target_index].boot_once = true;
         } else {
             // Permanent activation - this would normally require a reboot
             // For simulation purposes, we'll set it as the next boot environment
+            // Only one BE can have next_boot=true, and no BE should have boot_once=true
             for be in bes.iter_mut() {
                 be.next_boot = false;
+                be.boot_once = false;
             }
             bes[target_index].next_boot = true;
         }
 
+        Ok(())
+    }
+
+    fn deactivate(&self, be_name: &str) -> Result<(), Error> {
+        let mut bes = self.bes.borrow_mut();
+        let target_index = match bes.iter().position(|be| be.name == be_name) {
+            Some(index) => index,
+            None => {
+                return Err(Error::NotFound {
+                    name: be_name.to_string(),
+                });
+            }
+        };
+        bes[target_index].boot_once = false;
         Ok(())
     }
 
@@ -290,6 +302,7 @@ fn sample_boot_environments() -> Vec<BootEnvironment> {
             mountpoint: Some(std::path::PathBuf::from("/")),
             active: true,
             next_boot: true,
+            boot_once: false,
             space: 950_000_000,  // ~906M
             created: 1623301740, // 2021-06-10 01:09
         },
@@ -300,6 +313,7 @@ fn sample_boot_environments() -> Vec<BootEnvironment> {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,         // 8K
             created: 1623305460, // 2021-06-10 02:11
         },
@@ -370,6 +384,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -407,6 +422,7 @@ mod tests {
             mountpoint: Some(std::path::PathBuf::from("/")),
             active: true,
             next_boot: true,
+            boot_once: false,
             space: 950_000_000,
             created: 1623301740,
         };
@@ -433,6 +449,7 @@ mod tests {
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -498,6 +515,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -532,6 +550,7 @@ mod tests {
             mountpoint: Some(std::path::PathBuf::from("/mnt/existing")),
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -550,6 +569,7 @@ mod tests {
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -561,6 +581,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623305460,
         };
@@ -579,6 +600,7 @@ mod tests {
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -603,6 +625,7 @@ mod tests {
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -627,6 +650,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -647,6 +671,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -679,6 +704,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -690,6 +716,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623305460,
         };
@@ -709,6 +736,7 @@ mod tests {
             mountpoint: None,
             active: true,
             next_boot: true,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -720,6 +748,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623305460,
         };
@@ -727,7 +756,7 @@ mod tests {
         let client = EmulatorClient::new(vec![be1, be2]);
 
         // Activate be2 permanently
-        let result = client.activate("be2", false, false);
+        let result = client.activate("be2", false);
         assert!(result.is_ok());
 
         // Verify activation
@@ -745,6 +774,7 @@ mod tests {
             mountpoint: None,
             active: true,
             next_boot: true,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -756,6 +786,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623305460,
         };
@@ -763,17 +794,17 @@ mod tests {
         let client = EmulatorClient::new(vec![be1, be2]);
 
         // Activate be2 temporarily
-        let result = client.activate("be2", true, false);
+        let result = client.activate("be2", true);
         assert!(result.is_ok());
 
         // Verify temporary activation
         let bes = client.get_boot_environments().unwrap();
-        assert!(!bes[0].next_boot); // be1 should no longer be next_boot
-        assert!(bes[1].next_boot); // be2 should be next_boot
+        assert!(!bes[0].boot_once); // be1 should not have boot_once
+        assert!(bes[1].boot_once); // be2 should have boot_once (temporary activation)
     }
 
     #[test]
-    fn test_emulated_activate_remove_temp() {
+    fn test_emulated_deactivate() {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
@@ -781,6 +812,7 @@ mod tests {
             mountpoint: None,
             active: true,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };
@@ -791,26 +823,148 @@ mod tests {
             description: None,
             mountpoint: None,
             active: false,
-            next_boot: true, // Temporarily activated
+            next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623305460,
         };
 
         let client = EmulatorClient::new(vec![be1, be2]);
 
-        // Remove temporary activation
-        let result = client.activate("be1", false, true);
+        // Remove temporary activation from be2
+        let result = client.deactivate("be2");
         assert!(result.is_ok());
 
         // Verify temp activation removed
         let bes = client.get_boot_environments().unwrap();
-        assert!(!bes[1].next_boot); // be2 should no longer be next_boot
+        assert!(!bes[1].boot_once); // be2 should no longer have boot_once
+    }
+
+    #[test]
+    fn test_emulated_deactivate_no_temp() {
+        // Test deactivate when the specified boot environment doesn't have boot_once set
+        let client = EmulatorClient::sampled();
+        let result = client.deactivate("default");
+        assert!(result.is_ok());
+
+        // Verify the default BE still doesn't have boot_once set
+        let bes = client.get_boot_environments().unwrap();
+        let default_be = bes.iter().find(|be| be.name == "default").unwrap();
+        assert!(!default_be.boot_once);
+    }
+
+    #[test]
+    fn test_emulated_deactivate_not_found() {
+        let client = EmulatorClient::sampled();
+        let result = client.deactivate("nonexistent");
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+    }
+
+    #[test]
+    fn test_emulated_deactivate_specific_be() {
+        // Test that deactivate only affects the specified boot environment
+        let be1 = BootEnvironment {
+            name: "be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
+            description: None,
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let be2 = BootEnvironment {
+            name: "be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
+            description: None,
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623305460,
+        };
+
+        let client = EmulatorClient::new(vec![be1, be2]);
+
+        // First, temporarily activate be2
+        client.activate("be2", true).unwrap();
+
+        // Verify be2 is temporarily activated
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].boot_once); // be1 should not have boot_once
+        assert!(bes[1].boot_once); // be2 should have boot_once
+
+        // Now deactivate be2
+        let result = client.deactivate("be2");
+        assert!(result.is_ok());
+
+        // Verify be2's boot_once flag was cleared
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].boot_once); // be1 should still not have boot_once
+        assert!(!bes[1].boot_once); // be2 should no longer have boot_once
+    }
+
+    #[test]
+    fn test_emulated_activate_mutual_exclusivity() {
+        // Test that only one BE can have next_boot=true and only one can have boot_once=true
+        let be1 = BootEnvironment {
+            name: "be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
+            description: None,
+            mountpoint: None,
+            active: true,
+            next_boot: true, // Initially set as next boot
+            boot_once: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let be2 = BootEnvironment {
+            name: "be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
+            description: None,
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623305460,
+        };
+
+        let client = EmulatorClient::new(vec![be1, be2]);
+
+        // Activate be2 permanently - should clear be1's next_boot
+        client.activate("be2", false).unwrap();
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].next_boot); // be1 should no longer be next_boot
+        assert!(bes[1].next_boot); // be2 should now be next_boot
+        assert!(!bes[0].boot_once); // no boot_once flags
+        assert!(!bes[1].boot_once);
+
+        // Activate be1 temporarily - should clear be2's next_boot and set be1's boot_once
+        client.activate("be1", true).unwrap();
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].next_boot); // no next_boot flags when using temporary
+        assert!(!bes[1].next_boot);
+        assert!(bes[0].boot_once); // be1 should have boot_once
+        assert!(!bes[1].boot_once); // be2 should not have boot_once
+
+        // Activate be2 temporarily - should clear be1's boot_once and set be2's boot_once
+        client.activate("be2", true).unwrap();
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].next_boot); // still no next_boot flags
+        assert!(!bes[1].next_boot);
+        assert!(!bes[0].boot_once); // be1 should no longer have boot_once
+        assert!(bes[1].boot_once); // be2 should now have boot_once
     }
 
     #[test]
     fn test_emulated_activate_not_found() {
         let client = EmulatorClient::new(vec![]);
-        let result = client.activate("nonexistent", false, false);
+        let result = client.activate("nonexistent", false);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -862,12 +1016,12 @@ mod tests {
         assert_eq!(bes[0].path, "zfake/ROOT/renamed-be");
 
         // Activate it temporarily
-        let result = client.activate("renamed-be", true, false);
+        let result = client.activate("renamed-be", true);
         assert!(result.is_ok());
 
         // Verify activation
         let bes = client.get_boot_environments().unwrap();
-        assert!(bes[0].next_boot);
+        assert!(bes[0].boot_once); // Should have boot_once for temporary activation
 
         // Destroy it (should work since it's not active)
         let result = client.destroy("renamed-be", false, false, false);
@@ -917,6 +1071,7 @@ mod tests {
             mountpoint: None,
             active: false,
             next_boot: false,
+            boot_once: false,
             space: 8192,
             created: 1623301740,
         };

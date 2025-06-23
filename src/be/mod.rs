@@ -65,6 +65,8 @@ pub struct BootEnvironment {
     pub active: bool,
     /// Whether the system will reboot into this environment.
     pub next_boot: bool,
+    /// Whether the system will reboot into this environment temporarily.
+    pub boot_once: bool,
     /// Bytes on the filesystem associated with this boot environment.
     pub space: u64,
     /// Unix timestamp for when this boot environment was created.
@@ -107,7 +109,9 @@ pub trait Client {
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error>;
 
-    fn activate(&self, be_name: &str, temporary: bool, remove_temp: bool) -> Result<(), Error>;
+    fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error>;
+
+    fn deactivate(&self, be_name: &str) -> Result<(), Error>;
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error>;
 
