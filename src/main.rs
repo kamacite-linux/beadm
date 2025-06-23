@@ -26,7 +26,7 @@ mod be {
         UnmountFailed { name: String, reason: String },
 
         #[error("Invalid boot environment name '{name}': {reason}")]
-        InvalidBeName { name: String, reason: String },
+        InvalidName { name: String, reason: String },
 
         #[error("Boot environment name '{name}' is currently mounted at '{mountpoint}'")]
         BeMounted { name: String, mountpoint: String },
@@ -72,6 +72,86 @@ mod be {
         pub space: u64,
         /// Unix timestamp for when this boot environment was created.
         pub created: i64,
+    }
+
+    /// Validates a boot environment name for ZFS dataset naming rules.
+    pub fn validate_be_name(be_name: &str, beroot: &str) -> Result<(), Error> {
+        // Total length including beroot prefix + '/' must be under 256 chars.
+        if beroot.len() + be_name.len() > 255 {
+            return Err(Error::InvalidName {
+                name: be_name.to_string(),
+                reason: "name too long".to_string(),
+            });
+        }
+
+        // We could call out to zfs_validate_name() here but this is more fun!
+        //
+        // ZFS dataset names must match something like the regular expression
+        // [a-zA-Z0-9][a-zA-Z0-9-_:. ]?.
+        //
+        // But FreeBSD is documented to break on boot environments that contain
+        // spaces, so let's prohibit that, too.
+
+        if be_name.is_empty() {
+            return Err(Error::InvalidName {
+                name: be_name.to_string(),
+                reason: "name cannot be empty".to_string(),
+            });
+        }
+
+        let first_char = be_name.chars().next().unwrap();
+        if !first_char.is_ascii_alphanumeric() {
+            return Err(Error::InvalidName {
+                name: be_name.to_string(),
+                reason: format!("name cannot begin with '{}'", first_char),
+            });
+        }
+
+        for c in be_name.chars() {
+            if !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_' && c != ':' {
+                return Err(Error::InvalidName {
+                    name: be_name.to_string(),
+                    reason: format!("invalid character '{}' in name", c),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_validate_be_name_valid() {
+            // Valid names should pass
+            assert!(validate_be_name("valid-name", "zfake/ROOT").is_ok());
+            assert!(validate_be_name("test_env", "zfake/ROOT").is_ok());
+            assert!(validate_be_name("env123", "zfake/ROOT").is_ok());
+            assert!(validate_be_name("123numbers", "zfake/ROOT").is_ok());
+            assert!(validate_be_name("test:colon", "zfake/ROOT").is_ok());
+            assert!(validate_be_name("my.env", "zfake/ROOT").is_ok());
+        }
+
+        #[test]
+        fn test_validate_be_name_invalid() {
+            // Invalid names should fail
+            assert!(validate_be_name("", "zfake/ROOT").is_err()); // empty
+            assert!(validate_be_name("-invalid", "zfake/ROOT").is_err()); // starts with dash
+            assert!(validate_be_name(".invalid", "zfake/ROOT").is_err()); // starts with dot
+            assert!(validate_be_name("_invalid", "zfake/ROOT").is_err()); // starts with underscore
+            assert!(validate_be_name("invalid name", "zfake/ROOT").is_err()); // space
+            assert!(validate_be_name("invalid@name", "zfake/ROOT").is_err()); // invalid char
+            assert!(validate_be_name("test/name", "zfake/ROOT").is_err()); // invalid char
+        }
+
+        #[test]
+        fn test_validate_be_name_too_long() {
+            let beroot = "zfake/ROOT";
+            let long_name = "a".repeat(256 - beroot.len());
+            assert!(validate_be_name(&long_name, beroot).is_err());
+        }
     }
 
     pub trait Client {
@@ -168,6 +248,8 @@ mod be {
                 source: Option<&str>,
                 _properties: &[String],
             ) -> Result<(), Error> {
+                validate_be_name(be_name, &self.root)?;
+
                 let mut bes = self.bes.borrow_mut();
 
                 if bes.iter().any(|be| be.name == be_name) {
@@ -325,6 +407,7 @@ mod be {
             }
 
             fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
+                validate_be_name(new_name, &self.root)?;
                 let mut bes = self.bes.borrow_mut();
 
                 // Check if source BE exists
@@ -892,6 +975,17 @@ mod be {
                 let client = EmulatorClient::new(vec![]);
                 let result = client.activate("nonexistent", false, false);
                 assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+            }
+
+            #[test]
+            fn test_emulated_create_or_rename_invalid_name() {
+                let client = EmulatorClient::sampled();
+                assert!(client.create("-invalid", None, None, &[]).is_err());
+                assert!(client.create("invalid name", None, None, &[]).is_err());
+                assert!(client.create("invalid@name", None, None, &[]).is_err());
+                assert!(client.rename("default", "-invalid").is_err());
+                assert!(client.rename("default", "invalid name").is_err());
+                assert!(client.rename("default", "invalid@name").is_err());
             }
 
             #[test]
