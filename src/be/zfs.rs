@@ -405,16 +405,12 @@ impl Dataset {
 
     /// Get the space used by this dataset.
     pub fn get_used_space(&self) -> u64 {
-        self.get_property(ZFS_PROP_USED)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0)
+        self.get_numeric_property(ZFS_PROP_USED).unwrap_or(0)
     }
 
     /// Get the creation timestamp for this dataset.
     pub fn get_creation_time(&self) -> i64 {
-        self.get_property(ZFS_PROP_CREATION)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0)
+        self.get_numeric_property(ZFS_PROP_CREATION).unwrap_or(0) as i64
     }
 
     // Rename this dataset.
@@ -639,6 +635,22 @@ impl Dataset {
         } else {
             None
         }
+    }
+
+    /// Get a numeric ZFS property for this dataset.
+    fn get_numeric_property(&self, prop: c_int) -> Option<u64> {
+        let mut value: u64 = 0;
+        let result = unsafe {
+            zfs_prop_get_numeric(
+                self.handle,
+                prop,
+                &mut value as *mut u64,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if result == 0 { Some(value) } else { None }
     }
 }
 
@@ -1057,6 +1069,14 @@ mod libzfs {
             len: usize,
             source: *mut c_int,
             literal: c_int,
+        ) -> c_int;
+        pub fn zfs_prop_get_numeric(
+            zhp: *mut ZfsHandle,
+            prop: ZfsProp,
+            value: *mut u64,
+            source: *mut c_int,
+            buf: *mut c_char,
+            len: usize,
         ) -> c_int;
 
         // ZPool functions
