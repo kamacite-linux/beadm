@@ -13,19 +13,14 @@ use self::libzfs::*;
 /// A ZFS boot environment client backed by libzfs.
 pub struct LibZfsClient {
     root: DatasetName,
-    lzh: *mut LibzfsHandle,
+    lzh: LibHandle,
 }
 
 impl LibZfsClient {
     /// Create a new client with the specified boot environment root.
     pub fn new(root: String) -> Result<Self, Error> {
         let root = DatasetName::new(root.as_str())?;
-        let lzh = unsafe { libzfs_init() };
-        if lzh.is_null() {
-            return Err(Error::ZfsError {
-                message: "Failed to initialize libzfs".to_string(),
-            });
-        }
+        let lzh = LibHandle::new()?;
         Ok(Self { root, lzh })
     }
 
@@ -39,27 +34,17 @@ impl LibZfsClient {
     /// Get the filesystem (if any) that will be active on next boot for the
     /// pool backing the boot environment root.
     fn get_next_boot(&self) -> Result<Option<DatasetName>, Error> {
-        let zpool = Zpool::open(self.lzh, &self.root.pool())?;
+        let zpool = Zpool::open(&self.lzh, &self.root.pool())?;
         Ok(zpool.get_bootfs())
     }
 
     /// Check if a boot environment exists.
     fn be_exists(&self, be_name: &str) -> Result<bool, Error> {
         let be_ds = self.root.append(be_name)?;
-        match Dataset::filesystem(self.lzh, &be_ds) {
+        match Dataset::filesystem(&self.lzh, &be_ds) {
             Ok(_) => Ok(true),
             Err(Error::NotFound { .. }) => Ok(false),
             Err(e) => Err(e),
-        }
-    }
-}
-
-impl Drop for LibZfsClient {
-    fn drop(&mut self) {
-        if !self.lzh.is_null() {
-            unsafe {
-                libzfs_fini(self.lzh);
-            }
         }
     }
 }
@@ -93,7 +78,7 @@ impl Client for LibZfsClient {
         // Create the ZFS filesystem
         let result = unsafe {
             zfs_create(
-                self.lzh,
+                self.lzh.handle,
                 be_path.as_ptr(),
                 ZFS_TYPE_FILESYSTEM,
                 ptr::null_mut(),
@@ -139,7 +124,7 @@ impl Client for LibZfsClient {
             }
         }
 
-        let dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
 
         let mountpoint = dataset.get_mountpoint();
         if mountpoint.is_some() {
@@ -159,7 +144,7 @@ impl Client for LibZfsClient {
 
     fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
-        let dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
 
         // Check if it's already mounted.
         if let Some(existing) = dataset.get_mountpoint() {
@@ -178,7 +163,7 @@ impl Client for LibZfsClient {
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
-        let dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
 
         // Don't unmount what isn't mounted.
         if dataset.get_mountpoint().is_none() {
@@ -198,13 +183,13 @@ impl Client for LibZfsClient {
         let new_path = self.root.append(new_name)?;
 
         // Check if the target already exists.
-        if Dataset::filesystem(self.lzh, &new_path).is_ok() {
+        if Dataset::filesystem(&self.lzh, &new_path).is_ok() {
             return Err(Error::Conflict {
                 name: new_name.to_string(),
             });
         }
 
-        let dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
         dataset.rename(
             &new_path,
             RenameFlags {
@@ -257,9 +242,9 @@ impl Client for LibZfsClient {
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
-        let be_dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let be_dataset = Dataset::filesystem(&self.lzh, &be_path)?;
         let snap_path = self.root.snapshot(snapshot)?;
-        let snap_dataset = Dataset::snapshot(self.lzh, &snap_path)?;
+        let snap_dataset = Dataset::snapshot(&self.lzh, &snap_path)?;
 
         // TODO: Better error mapping.
         be_dataset
@@ -273,7 +258,7 @@ impl Client for LibZfsClient {
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
-        let root_dataset = Dataset::filesystem(self.lzh, &self.root)?;
+        let root_dataset = Dataset::filesystem(&self.lzh, &self.root)?;
         let rootfs = get_rootfs()?;
         let bootfs = self.get_next_boot()?;
         let mut bes = Vec::new();
@@ -302,7 +287,7 @@ impl Client for LibZfsClient {
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
         let be_path = self.root.append(be_name)?;
-        let dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
         let mut snapshots = Vec::new();
         dataset.iter_snapshots(|snapshot| {
             if let Some(path) = snapshot.get_name() {
@@ -327,12 +312,8 @@ struct Dataset {
 
 impl Dataset {
     /// Open a ZFS dataset with the given name and type.
-    pub fn open(
-        handle: *mut LibzfsHandle,
-        name: &DatasetName,
-        zfs_type: c_int,
-    ) -> Result<Self, Error> {
-        let handle = unsafe { zfs_open(handle, name.as_ptr(), zfs_type) };
+    pub fn open(lzh: &LibHandle, name: &DatasetName, zfs_type: c_int) -> Result<Self, Error> {
+        let handle = unsafe { zfs_open(lzh.handle, name.as_ptr(), zfs_type) };
         if handle.is_null() {
             return Err(Error::NotFound {
                 name: name.to_string(),
@@ -345,13 +326,13 @@ impl Dataset {
     }
 
     // Open a filesystem dataset.
-    pub fn filesystem(handle: *mut LibzfsHandle, name: &DatasetName) -> Result<Self, Error> {
-        Dataset::open(handle, name, ZFS_TYPE_FILESYSTEM)
+    pub fn filesystem(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
+        Dataset::open(lzh, name, ZFS_TYPE_FILESYSTEM)
     }
 
     // Open a snapshot dataset.
-    pub fn snapshot(handle: *mut LibzfsHandle, name: &DatasetName) -> Result<Self, Error> {
-        Dataset::open(handle, name, ZFS_TYPE_SNAPSHOT)
+    pub fn snapshot(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
+        Dataset::open(lzh, name, ZFS_TYPE_SNAPSHOT)
     }
 
     /// Create a Dataset from an existing handle. Closing the handle is the
@@ -630,8 +611,8 @@ struct Zpool {
 
 impl Zpool {
     /// Open a zpool by name.
-    pub fn open(lzh: *mut LibzfsHandle, name: &DatasetName) -> Result<Self, Error> {
-        let handle = unsafe { zpool_open(lzh, name.as_ptr()) };
+    pub fn open(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
+        let handle = unsafe { zpool_open(lzh.handle, name.as_ptr()) };
         if handle.is_null() {
             return Err(Error::NotFound {
                 name: name.to_string(),
@@ -763,6 +744,32 @@ impl DatasetName {
             name[slash_pos + 1..].to_string()
         } else {
             name
+        }
+    }
+}
+
+// Wraps the libzfs handle to manage its lifetime.
+struct LibHandle {
+    pub handle: *mut LibzfsHandle,
+}
+
+impl LibHandle {
+    pub fn new() -> Result<Self, Error> {
+        let handle = unsafe { libzfs_init() };
+        if handle.is_null() {
+            Err(Error::ZfsError {
+                message: "failed to initialize libzfs".to_string(),
+            })
+        } else {
+            Ok(Self { handle })
+        }
+    }
+}
+
+impl Drop for LibHandle {
+    fn drop(&mut self) {
+        unsafe {
+            libzfs_fini(self.handle);
         }
     }
 }
