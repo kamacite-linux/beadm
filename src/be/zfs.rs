@@ -1,4 +1,6 @@
 use std::ffi::{CStr, CString, OsStr, c_char, c_int};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -34,11 +36,11 @@ impl LibZfsClient {
         Self::new("rpool/ROOT".to_string())
     }
 
-    /// Get the active boot environment (the one we're running from).
-    fn get_active_be(&self) -> Result<String, Error> {
-        // Stub: In a real implementation, this would detect the current BE
-        // by checking mountpoints, kernel parameters, etc.
-        Ok("default".to_string())
+    /// Get the filesystem (if any) that will be active on next boot for the
+    /// pool backing the boot environment root.
+    fn get_next_boot(&self) -> Result<Option<DatasetName>, Error> {
+        let zpool = Zpool::open(self.lzh, &self.root.pool())?;
+        Ok(zpool.get_bootfs())
     }
 
     /// Check if a boot environment exists.
@@ -119,18 +121,24 @@ impl Client for LibZfsClient {
         _force_no_verify: bool,
         _snapshots: bool,
     ) -> Result<(), Error> {
-        // Cannot destroy active boot environment.
-        if self
-            .get_active_be()
-            .map(|active| active == be_name)
-            .unwrap_or(false)
-        {
-            return Err(Error::CannotDestroyActive {
-                name: be_name.to_string(),
-            });
+        let be_path = self.root.append(be_name)?;
+
+        // Cannot destroy the active or next boot environment.
+        if let Some(rootfs) = get_rootfs()? {
+            if be_path == rootfs {
+                return Err(Error::CannotDestroyActive {
+                    name: be_name.to_string(),
+                });
+            }
+        }
+        if let Some(bootfs) = self.get_next_boot()? {
+            if be_path == bootfs {
+                return Err(Error::CannotDestroyActive {
+                    name: be_name.to_string(),
+                });
+            }
         }
 
-        let be_path = self.root.append(be_name)?;
         let dataset = Dataset::filesystem(self.lzh, &be_path)?;
 
         let mountpoint = dataset.get_mountpoint();
@@ -270,11 +278,13 @@ impl Client for LibZfsClient {
         // Helper struct to pass multiple pieces of data to the callback.
         struct CollectData {
             boot_environments: Vec<BootEnvironment>,
-            current_be: String,
+            rootfs: Option<DatasetName>,
+            bootfs: Option<DatasetName>,
         }
         let mut collect_data = CollectData {
             boot_environments: Vec::new(),
-            current_be: self.get_active_be().unwrap_or_default(),
+            rootfs: get_rootfs()?,
+            bootfs: self.get_next_boot()?,
         };
         let data_ptr = &mut collect_data as *mut CollectData;
 
@@ -295,13 +305,17 @@ impl Client for LibZfsClient {
                 path.clone()
             };
 
+            let ds = DatasetName::new(&path).unwrap();
+            let active = collect_data.rootfs.as_ref().map_or(false, |fs| *fs == ds);
+            let next_boot = collect_data.bootfs.as_ref().map_or(false, |fs| *fs == ds);
+
             collect_data.boot_environments.push(BootEnvironment {
                 name: be_name.to_string(),
                 path: path,
                 description: None, // TODO: Read from user property
                 mountpoint: dataset.get_mountpoint(),
-                active: be_name == collect_data.current_be,
-                next_boot: false, // TODO: Read from boot configuration
+                active,
+                next_boot,
                 boot_once: false, // TODO: Read from boot configuration
                 space: dataset.get_used_space(),
                 created: dataset.get_creation_time(),
@@ -532,8 +546,69 @@ impl Drop for Dataset {
     }
 }
 
+/// Safe wrapper for zpool operations.
+struct Zpool {
+    handle: *mut ZpoolHandle,
+}
+
+impl Zpool {
+    /// Open a zpool by name.
+    pub fn open(lzh: *mut LibzfsHandle, name: &DatasetName) -> Result<Self, Error> {
+        let handle = unsafe { zpool_open(lzh, name.as_ptr()) };
+        if handle.is_null() {
+            return Err(Error::NotFound {
+                name: name.to_string(),
+            });
+        }
+        Ok(Zpool { handle })
+    }
+
+    /// Get a zpool property.
+    pub fn get_property(&self, prop: c_int) -> Option<String> {
+        const PROP_BUF_SIZE: usize = 1024;
+        let mut buf = vec![0u8; PROP_BUF_SIZE];
+        let result = unsafe {
+            zpool_get_prop(
+                self.handle,
+                prop,
+                buf.as_mut_ptr() as *mut std::os::raw::c_char,
+                PROP_BUF_SIZE,
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if result == 0 {
+            if let Some(null_pos) = buf.iter().position(|&x| x == 0) {
+                buf.truncate(null_pos);
+            }
+            String::from_utf8(buf).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Get the bootfs property (which dataset boots by default).
+    pub fn get_bootfs(&self) -> Option<DatasetName> {
+        match self.get_property(ZPOOL_PROP_BOOTFS) {
+            Some(fs) => DatasetName::new(&fs).map_or(None, |ds| Some(ds)),
+            None => None,
+        }
+    }
+}
+
+impl Drop for Zpool {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                zpool_close(self.handle);
+            }
+        }
+    }
+}
+
 // Convenience type for already-validated ZFS dataset names that can be passed
 // directly to the FFI layer.
+#[derive(PartialEq, Eq)]
 struct DatasetName {
     inner: CString,
 }
@@ -578,6 +653,64 @@ impl DatasetName {
         // We can safely unwrap here because dataset names are valid UTF-8.
         self.inner.to_str().unwrap().to_string()
     }
+
+    /// Get the pool name (the first component) for the dataset.
+    pub fn pool(&self) -> Self {
+        let mut v = Vec::from(self.inner.to_bytes());
+        for (i, b) in v.iter().enumerate() {
+            if *b == ('/' as u8) {
+                v.truncate(i);
+                break;
+            }
+        }
+        Self {
+            // We know there are no nul bytes in either component at this
+            // point, so this is safe.
+            inner: unsafe { CString::from_vec_unchecked(v) },
+        }
+    }
+}
+
+/// Get the root ZFS filesystem, if any, from `/proc/mounts`.
+fn get_rootfs() -> Result<Option<DatasetName>, Error> {
+    let file = File::open("/proc/mounts")?;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let device = parts[0];
+        let mountpoint = parts[1];
+        let fstype = parts[2];
+
+        if mountpoint == "/" && fstype != "zfs" {
+            // Not running ZFS-on-root at all.
+            break;
+        }
+
+        if mountpoint == "/" && fstype == "zfs" {
+            return DatasetName::new(device).map(|ds| Some(ds));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dataset_name_pool() {
+        let name = DatasetName::new("rpool/ROOT/default").unwrap();
+        assert_eq!(name.pool().to_string(), "rpool");
+
+        let name = DatasetName::new("tank/data/projects").unwrap();
+        assert_eq!(name.pool().to_string(), "tank");
+
+        let name = DatasetName::new("simple").unwrap();
+        assert_eq!(name.pool().to_string(), "simple");
+    }
 }
 
 // libzfs FFI bindings
@@ -603,14 +736,17 @@ mod libzfs {
     // ZFS type constants from sys/fs/zfs.h
     pub const ZFS_TYPE_FILESYSTEM: c_int = 1 << 0;
     pub const ZFS_TYPE_SNAPSHOT: c_int = 1 << 1;
-    pub const ZFS_TYPE_POOL: c_int = 1 << 3;
 
     // ZFS property constants from libzfs.h
     pub const ZFS_PROP_CREATION: c_int = 1;
     pub const ZFS_PROP_USED: c_int = 2;
 
+    // ZPool property constants from sys/fs/zfs.h
+    pub const ZPOOL_PROP_BOOTFS: c_int = 7;
+
     // ZFS property type (placeholder - we'd need to define proper enum)
     pub type ZfsProp = c_int;
+    pub type ZpoolProp = c_int;
 
     // Rename flags structure matching libzfs.h
     #[repr(C)]
@@ -680,6 +816,18 @@ mod libzfs {
         pub fn zfs_prop_get(
             zhp: *mut ZfsHandle,
             prop: ZfsProp,
+            buf: *mut c_char,
+            len: usize,
+            source: *mut c_int,
+            literal: c_int,
+        ) -> c_int;
+
+        // ZPool functions
+        pub fn zpool_open(hdl: *mut LibzfsHandle, name: *const c_char) -> *mut ZpoolHandle;
+        pub fn zpool_close(zhp: *mut ZpoolHandle);
+        pub fn zpool_get_prop(
+            zhp: *mut ZpoolHandle,
+            prop: ZpoolProp,
             buf: *mut c_char,
             len: usize,
             source: *mut c_int,
