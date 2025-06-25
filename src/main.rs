@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod be;
 
 use be::mock::EmulatorClient;
-use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
+use be::{BootEnvironment, Client, Error, MountMode, Snapshot, format_zfs_bytes};
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -213,19 +213,6 @@ fn format_active_flags(be: &BootEnvironment) -> Option<String> {
     Some(flags)
 }
 
-fn format_space(bytes: u64) -> String {
-    // TODO: libzfs has a utility for this we should use, if possible.
-    if bytes < 1024 {
-        format!("{}B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{}K", bytes / 1024)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{}M", bytes / (1024 * 1024))
-    } else {
-        format!("{}G", bytes / (1024 * 1024 * 1024))
-    }
-}
-
 fn format_timestamp(timestamp: i64) -> String {
     match Local.timestamp_opt(timestamp, 0) {
         chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
@@ -309,13 +296,11 @@ fn print_boot_environments<T: Client>(
     // respective header.
     let mut name_width = 4;
     let mut mountpoint_width = 10;
-    let mut space_width = 5;
     for row in &rows {
         name_width = name_width.max(row.name().len());
         if let Some(mountpoint) = row.mountpoint() {
             mountpoint_width = mountpoint_width.max(mountpoint.len());
         }
-        space_width = space_width.max(format_space(row.space()).len());
     }
 
     // The traditional 'beadm list' format, with minor differences:
@@ -324,7 +309,7 @@ fn print_boot_environments<T: Client>(
     // - Headers are uppercase with no separator, similar to other zfs commands.
     writeln!(
         writer,
-        "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
+        "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {}  {:<16}  {}",
         "NAME",
         "ACTIVE",
         "MOUNTPOINT",
@@ -332,22 +317,20 @@ fn print_boot_environments<T: Client>(
         "CREATED",
         "DESCRIPTION",
         name_width = name_width,
-        mountpoint_width = mountpoint_width,
-        space_width = space_width
+        mountpoint_width = mountpoint_width
     )?;
     for row in rows {
         writeln!(
             writer,
-            "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<space_width$}  {:<16}  {}",
+            "{:<name_width$}  {:<6}  {:<mountpoint_width$}  {:<5}  {:<16}  {}",
             row.name(),
             row.active_flags().unwrap_or("-".to_string()),
             row.mountpoint().unwrap_or("-".to_string()),
-            format_space(row.space()),
+            format_zfs_bytes(row.space()),
             format_timestamp(row.created()),
             row.description().unwrap_or("-"),
             name_width = name_width,
-            mountpoint_width = mountpoint_width,
-            space_width = space_width
+            mountpoint_width = mountpoint_width
         )?;
     }
 
@@ -466,7 +449,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).unwrap(),
             r"NAME     ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
-default  NR      /           905M   2021-06-10 01:09  -
+default  NR      /           906M   2021-06-10 01:09  -
 alt      -       -           8K     2021-06-10 02:11  Testing
 "
         );
@@ -597,9 +580,9 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         assert_eq!(
             String::from_utf8(output).unwrap(),
             r"NAME                      ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
-default                   NR      /           905M   2021-06-10 01:09  -
-default@2021-06-10-04:30  -       -           394K   2021-06-10 01:30  -
-default@2021-06-10-05:10  -       -           394K   2021-06-10 02:10  -
+default                   NR      /           906M   2021-06-10 01:09  -
+default@2021-06-10-04:30  -       -           395K   2021-06-10 01:30  -
+default@2021-06-10-05:10  -       -           395K   2021-06-10 02:10  -
 alt                       -       -           8K     2021-06-10 02:11  Testing
 alt@backup                -       -           1K     2021-06-10 02:20  -
 "

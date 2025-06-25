@@ -6,6 +6,9 @@ pub mod mock;
 pub mod validation;
 pub mod zfs;
 
+// Re-export useful functions
+pub use zfs::format_zfs_bytes;
+
 #[derive(ThisError, Debug)]
 pub enum Error {
     #[error("Boot environment '{name}' not found")]

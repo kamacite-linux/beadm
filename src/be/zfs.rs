@@ -847,6 +847,25 @@ impl Drop for LibHandle {
     }
 }
 
+/// Format a byte count using the same method as the standard ZFS CLI tools.
+pub fn format_zfs_bytes(bytes: u64) -> String {
+    // zfs_nicebytes is guaranteed to return something that fits in five bytes.
+    const BUF_SIZE: usize = 6;
+    let mut buf = vec![0u8; BUF_SIZE];
+    unsafe {
+        zfs_nicebytes(
+            bytes,
+            buf.as_mut_ptr() as *mut std::os::raw::c_char,
+            BUF_SIZE,
+        );
+    }
+    // Truncate at the null terminator.
+    if let Some(null_pos) = buf.iter().position(|&x| x == 0) {
+        buf.truncate(null_pos);
+    }
+    String::from_utf8(buf).unwrap_or("-".to_string())
+}
+
 /// Get the root ZFS filesystem, if any, from `/proc/mounts`.
 fn get_rootfs() -> Result<Option<DatasetName>, Error> {
     let file = File::open("/proc/mounts")?;
@@ -957,6 +976,38 @@ mod tests {
                 .to_string(),
             "rpool/ROOT"
         );
+    }
+
+    #[test]
+    fn test_format_zfs_bytes() {
+        // We're technically just testing a ZFS library function here, but
+        // these are useful to have in case we ever need to write an
+        // independent implementation.
+
+        // Boundary values.
+        assert_eq!(format_zfs_bytes(0), "0B");
+        assert_eq!(format_zfs_bytes(u64::MAX), "16.0E");
+
+        // Verify no decimal places for exact order of magnitude values.
+        assert_eq!(format_zfs_bytes(1024), "1K");
+        assert_eq!(format_zfs_bytes(1_048_576), "1M");
+        assert_eq!(format_zfs_bytes(1_073_741_824), "1G");
+        assert_eq!(format_zfs_bytes(1_099_511_627_776), "1T");
+        assert_eq!(format_zfs_bytes(1_125_899_906_842_624), "1P");
+        assert_eq!(format_zfs_bytes(1_152_921_504_606_846_976), "1E");
+
+        // Verify for values that need rounding to truncate precision.
+        assert_eq!(format_zfs_bytes(10239), "10.0K"); // 9.999K
+        assert_eq!(format_zfs_bytes(10289), "10.0K"); // 10.04K
+        assert_eq!(format_zfs_bytes(1023), "1023B"); // 0.999K
+        assert_eq!(format_zfs_bytes(1025), "1.00K"); // 1.001K
+        assert_eq!(format_zfs_bytes(1028), "1.00K"); // 1.004K
+        assert_eq!(format_zfs_bytes(1610612736), "1.50G"); // 1.5G exactly
+
+        // Test 5-character formatting limit edge cases.
+        assert_eq!(format_zfs_bytes(10_234_880), "9.76M");
+        assert_eq!(format_zfs_bytes(102_348_800), "97.6M");
+        assert_eq!(format_zfs_bytes(1_023_488_000), "976M");
     }
 }
 
@@ -1078,6 +1129,9 @@ mod libzfs {
             buf: *mut c_char,
             len: usize,
         ) -> c_int;
+
+        // Utility functions
+        pub fn zfs_nicebytes(bytes: u64, buf: *mut c_char, len: usize);
 
         // ZPool functions
         pub fn zpool_open(hdl: *mut LibzfsHandle, name: *const c_char) -> *mut ZpoolHandle;
