@@ -274,35 +274,17 @@ impl Client for LibZfsClient {
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
         let root_dataset = Dataset::filesystem(self.lzh, &self.root)?;
-
-        // Helper struct to pass multiple pieces of data to the callback.
-        struct CollectData {
-            boot_environments: Vec<BootEnvironment>,
-            rootfs: Option<DatasetName>,
-            bootfs: Option<DatasetName>,
-        }
-        let mut collect_data = CollectData {
-            boot_environments: Vec::new(),
-            rootfs: get_rootfs()?,
-            bootfs: self.get_next_boot()?,
-        };
-        let data_ptr = &mut collect_data as *mut CollectData;
-
-        extern "C" fn collect_be_callback(
-            zhp: *mut ZfsHandle,
-            data: *mut std::os::raw::c_void,
-        ) -> std::os::raw::c_int {
-            let collect_data = unsafe { &mut *(data as *mut CollectData) };
-            let dataset = Dataset::borrowed(zhp);
-
+        let rootfs = get_rootfs()?;
+        let bootfs = self.get_next_boot()?;
+        let mut bes = Vec::new();
+        root_dataset.iter_children(|dataset| {
             let path = match dataset.get_name() {
                 Some(name) => name,
-                None => return 0, // Skip this iteration.
+                None => return Ok(()), // Skip this iteration
             };
-            let active = collect_data.rootfs.as_ref().map_or(false, |fs| *fs == path);
-            let next_boot = collect_data.bootfs.as_ref().map_or(false, |fs| *fs == path);
-
-            collect_data.boot_environments.push(BootEnvironment {
+            let active = rootfs.as_ref().map_or(false, |fs| *fs == path);
+            let next_boot = bootfs.as_ref().map_or(false, |fs| *fs == path);
+            bes.push(BootEnvironment {
                 name: path.basename(),
                 path: path.to_string(),
                 description: None, // TODO: Read from user property
@@ -313,24 +295,9 @@ impl Client for LibZfsClient {
                 space: dataset.get_used_space(),
                 created: dataset.get_creation_time(),
             });
-
-            0 // Continue.
-        }
-
-        let result = unsafe {
-            zfs_iter_children(
-                root_dataset.handle(),
-                collect_be_callback,
-                data_ptr as *mut std::os::raw::c_void,
-            )
-        };
-        if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to iterate over boot environments".to_string(),
-            });
-        }
-
-        Ok(collect_data.boot_environments)
+            Ok(())
+        })?;
+        Ok(bes)
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
@@ -394,11 +361,6 @@ impl Dataset {
             handle,
             owns_handle: false,
         }
-    }
-
-    /// Get the raw handle (for use with libzfs functions)
-    pub fn handle(&self) -> *mut ZfsHandle {
-        self.handle
     }
 
     /// Get the dataset name.
@@ -561,6 +523,64 @@ impl Dataset {
         if result != 0 {
             return Err(Error::ZfsError {
                 message: "Failed to iterate over snapshots".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Iterate over child datasets.
+    pub fn iter_children<F>(&self, callback: F) -> Result<(), Error>
+    where
+        F: FnMut(&Dataset) -> Result<(), Error>,
+    {
+        // Helper struct to pass both callback and error state to the FFI callback
+        struct IterData<F> {
+            callback: F,
+            error: Option<Error>,
+        }
+
+        let mut iter_data = IterData {
+            callback,
+            error: None,
+        };
+        let data_ptr = &mut iter_data as *mut IterData<F>;
+
+        extern "C" fn children_callback<F>(
+            zhp: *mut ZfsHandle,
+            data: *mut std::os::raw::c_void,
+        ) -> std::os::raw::c_int
+        where
+            F: FnMut(&Dataset) -> Result<(), Error>,
+        {
+            let iter_data = unsafe { &mut *(data as *mut IterData<F>) };
+            let dataset = Dataset::borrowed(zhp);
+
+            match (iter_data.callback)(&dataset) {
+                Ok(()) => 0, // Continue iteration
+                Err(e) => {
+                    iter_data.error = Some(e);
+                    1 // Stop iteration
+                }
+            }
+        }
+
+        let result = unsafe {
+            zfs_iter_children(
+                self.handle,
+                children_callback::<F>,
+                data_ptr as *mut std::os::raw::c_void,
+            )
+        };
+
+        // Check if the callback set an error
+        if let Some(error) = iter_data.error {
+            return Err(error);
+        }
+
+        if result != 0 {
+            return Err(Error::ZfsError {
+                message: "Failed to iterate over children".to_string(),
             });
         }
 
