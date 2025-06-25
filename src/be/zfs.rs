@@ -299,19 +299,12 @@ impl Client for LibZfsClient {
                 Some(name) => name,
                 None => return 0, // Skip this iteration.
             };
-            let be_name = if let Some(index) = path.rfind('/') {
-                (&path[index + 1..]).to_string()
-            } else {
-                path.clone()
-            };
-
-            let ds = DatasetName::new(&path).unwrap();
-            let active = collect_data.rootfs.as_ref().map_or(false, |fs| *fs == ds);
-            let next_boot = collect_data.bootfs.as_ref().map_or(false, |fs| *fs == ds);
+            let active = collect_data.rootfs.as_ref().map_or(false, |fs| *fs == path);
+            let next_boot = collect_data.bootfs.as_ref().map_or(false, |fs| *fs == path);
 
             collect_data.boot_environments.push(BootEnvironment {
-                name: be_name.to_string(),
-                path: path,
+                name: path.basename(),
+                path: path.to_string(),
                 description: None, // TODO: Read from user property
                 mountpoint: dataset.get_mountpoint(),
                 active,
@@ -341,18 +334,21 @@ impl Client for LibZfsClient {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
-        // Check if BE exists
-        if !self.be_exists(be_name)? {
-            return Err(Error::NotFound {
-                name: be_name.to_string(),
-            });
-        }
-
-        // In a real implementation, this would iterate over snapshots
-        // using zfs_iter_snapshots() and collect their properties
-
-        // For now, return empty list
-        Ok(Vec::new())
+        let be_path = self.root.append(be_name)?;
+        let dataset = Dataset::filesystem(self.lzh, &be_path)?;
+        let mut snapshots = Vec::new();
+        dataset.iter_snapshots(|snapshot| {
+            if let Some(path) = snapshot.get_name() {
+                snapshots.push(Snapshot {
+                    name: path.basename(),
+                    path: path.to_string(),
+                    space: snapshot.get_used_space(),
+                    created: snapshot.get_creation_time(),
+                });
+            }
+            Ok(())
+        })?;
+        Ok(snapshots)
     }
 }
 
@@ -406,14 +402,14 @@ impl Dataset {
     }
 
     /// Get the dataset name.
-    pub fn get_name(&self) -> Option<String> {
+    pub fn get_name(&self) -> Option<DatasetName> {
         let name_ptr = unsafe { zfs_get_name(self.handle) };
         if name_ptr.is_null() {
             // The libzfs API claims this is not possible.
             return None;
         }
         let cstr = unsafe { CStr::from_ptr(name_ptr) };
-        Some(cstr.to_string_lossy().into_owned())
+        DatasetName::new(&cstr.to_string_lossy()).ok()
     }
 
     /// Get the dataset's current mountpoint if it is mounted.
@@ -507,6 +503,67 @@ impl Dataset {
                 message: "Failed to rollback dataset".to_string(),
             });
         }
+        Ok(())
+    }
+
+    /// Iterate over the snapshots of this dataset.
+    pub fn iter_snapshots<F>(&self, callback: F) -> Result<(), Error>
+    where
+        F: FnMut(&Dataset) -> Result<(), Error>,
+    {
+        // Helper struct to pass both callback and error state to the FFI callback
+        struct IterData<F> {
+            callback: F,
+            error: Option<Error>,
+        }
+
+        let mut iter_data = IterData {
+            callback,
+            error: None,
+        };
+        let data_ptr = &mut iter_data as *mut IterData<F>;
+
+        extern "C" fn snapshot_callback<F>(
+            zhp: *mut ZfsHandle,
+            data: *mut std::os::raw::c_void,
+        ) -> std::os::raw::c_int
+        where
+            F: FnMut(&Dataset) -> Result<(), Error>,
+        {
+            let iter_data = unsafe { &mut *(data as *mut IterData<F>) };
+            let dataset = Dataset::borrowed(zhp);
+
+            match (iter_data.callback)(&dataset) {
+                Ok(()) => 0, // Continue iteration
+                Err(e) => {
+                    iter_data.error = Some(e);
+                    1 // Stop iteration
+                }
+            }
+        }
+
+        let result = unsafe {
+            zfs_iter_snapshots(
+                self.handle,
+                0, // simple = false for recursive iteration
+                snapshot_callback::<F>,
+                data_ptr as *mut std::os::raw::c_void,
+                0,        // min_txg = 0 (no minimum)
+                u64::MAX, // max_txg = max (no maximum)
+            )
+        };
+
+        // Check if the callback set an error
+        if let Some(error) = iter_data.error {
+            return Err(error);
+        }
+
+        if result != 0 {
+            return Err(Error::ZfsError {
+                message: "Failed to iterate over snapshots".to_string(),
+            });
+        }
+
         Ok(())
     }
 
@@ -626,11 +683,9 @@ impl DatasetName {
         let mut v = Vec::from(self.inner.to_bytes());
         v.push('/' as u8);
         v.append(&mut Vec::from(child));
-        Ok(Self {
-            // We know there are no nul bytes in either component at this
-            // point, so this is safe.
-            inner: unsafe { CString::from_vec_unchecked(v) },
-        })
+        // We know all components are valid at this point, it is safe to skip
+        // UTF-8 and nul-byte checks.
+        unsafe { Self::from_vec_unchecked(v) }
     }
 
     pub fn snapshot(&self, name: &str) -> Result<Self, Error> {
@@ -638,11 +693,21 @@ impl DatasetName {
         let mut v = Vec::from(self.inner.to_bytes());
         v.push('@' as u8);
         v.append(&mut Vec::from(name));
-        Ok(Self {
-            // We know there are no nul bytes in either component at this
-            // point, so this is safe.
-            inner: unsafe { CString::from_vec_unchecked(v) },
-        })
+        // We know all components are valid at this point, it is safe to skip
+        // UTF-8 and nul-byte checks.
+        unsafe { Self::from_vec_unchecked(v) }
+    }
+
+    // Create a dataset name from a byte vector that is known to be (1) UTF-8;
+    // and (2) contain no nul bytes.
+    unsafe fn from_vec_unchecked(v: Vec<u8>) -> Result<Self, Error> {
+        unsafe {
+            // Don't trust the caller to have done end-to-end validation.
+            validate_dataset_name(str::from_utf8_unchecked(&v))?;
+            Ok(Self {
+                inner: CString::from_vec_unchecked(v),
+            })
+        }
     }
 
     pub fn as_ptr(&self) -> *const c_char {
@@ -667,6 +732,17 @@ impl DatasetName {
             // We know there are no nul bytes in either component at this
             // point, so this is safe.
             inner: unsafe { CString::from_vec_unchecked(v) },
+        }
+    }
+
+    /// Get the "basename" for the dataset, e.g. for `zfs/ROOT/be@snapshot`
+    /// this is `be@snapshot`.
+    pub fn basename(&self) -> String {
+        let name = self.to_string();
+        if let Some(slash_pos) = name.rfind('/') {
+            name[slash_pos + 1..].to_string()
+        } else {
+            name
         }
     }
 }
@@ -710,6 +786,56 @@ mod tests {
 
         let name = DatasetName::new("simple").unwrap();
         assert_eq!(name.pool().to_string(), "simple");
+    }
+
+    #[test]
+    fn test_dataset_name_basename() {
+        assert_eq!(DatasetName::new("pool").unwrap().basename(), "pool");
+        assert_eq!(
+            DatasetName::new("rpool/ROOT/default").unwrap().basename(),
+            "default"
+        );
+        assert_eq!(
+            DatasetName::new("rpool/ROOT/default@backup")
+                .unwrap()
+                .basename(),
+            "default@backup"
+        );
+        assert_eq!(
+            DatasetName::new("simple@snap").unwrap().basename(),
+            "simple@snap"
+        );
+    }
+
+    #[test]
+    fn test_dataset_name_append_and_snapshot() {
+        // Test append() method
+        let base = DatasetName::new("pool").unwrap();
+        let child = base.append("data").unwrap();
+        assert_eq!(child.to_string(), "pool/data");
+
+        let grandchild = child.append("projects").unwrap();
+        assert_eq!(grandchild.to_string(), "pool/data/projects");
+
+        // Test snapshot() method
+        let snap = base.snapshot("backup").unwrap();
+        assert_eq!(snap.to_string(), "pool@backup");
+
+        let child_snap = grandchild.snapshot("2023-12-01").unwrap();
+        assert_eq!(child_snap.to_string(), "pool/data/projects@2023-12-01");
+
+        // Test error cases - cannot append to a snapshot
+        let snapshot = DatasetName::new("pool/dataset@snap").unwrap();
+        assert!(snapshot.append("child").is_err());
+
+        // Test error cases - cannot create snapshot of a snapshot
+        assert!(snapshot.snapshot("another").is_err());
+
+        // Test validation still works
+        assert!(base.append("").is_err()); // empty component
+        assert!(base.append("invalid name").is_err()); // space in name
+        assert!(base.snapshot("").is_err()); // empty snapshot name
+        assert!(base.snapshot("invalid name").is_err()); // space in snapshot name
     }
 }
 
