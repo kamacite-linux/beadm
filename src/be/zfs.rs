@@ -25,10 +25,40 @@ impl LibZfsClient {
     }
 
     /// Create a new client using the default boot environment root.
-    pub fn system() -> Result<Self, Error> {
-        // In a real implementation, this would detect the current BE root
-        // For now, use a common default
-        Self::new("rpool/ROOT".to_string())
+    pub fn default() -> Result<Option<Self>, Error> {
+        // We're looking for a ZFS filesystem layout that looks like the
+        // following:
+        //
+        // 1. A dataset like zroot/ROOT/default mounted at '/' with the
+        //    canmount=noauto property set.
+        // 2. The parent dataset with mountpoint=none.
+        //
+        // This parent dataset is the boot environment root.
+        let rootfs = match get_rootfs()? {
+            Some(fs) => fs,
+            None => return Ok(None), // Not running on ZFS
+        };
+
+        let lzh = LibHandle::new()?;
+        let rootfs_dataset = match Dataset::filesystem(&lzh, &rootfs) {
+            Ok(ds) => ds,
+            Err(_) => return Ok(None),
+        };
+        let parent_dataset = match rootfs_dataset.parent(&lzh) {
+            Some(ds) => ds,
+            None => return Ok(None),
+        };
+
+        // Check if we have the expected canmount/mountpoint setup.
+        if rootfs_dataset.get_canmount() != Some("noauto".to_string()) {
+            return Ok(None);
+        }
+        if parent_dataset.get_mountpoint_property() != Some("none".to_string()) {
+            return Ok(None);
+        }
+
+        let root = parent_dataset.get_name().unwrap();
+        Ok(Some(Self { root, lzh }))
     }
 
     /// Get the filesystem (if any) that will be active on next boot for the
@@ -568,6 +598,25 @@ impl Dataset {
         Ok(())
     }
 
+    /// Get the parent dataset.
+    pub fn parent(&self, lzh: &LibHandle) -> Option<Dataset> {
+        if let Some(Some(name)) = self.get_name().map(|name| name.parent()) {
+            Dataset::filesystem(lzh, &name).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Get the canmount property of this dataset.
+    pub fn get_canmount(&self) -> Option<String> {
+        self.get_property(ZFS_PROP_CANMOUNT)
+    }
+
+    /// Get the mountpoint property of this dataset.
+    pub fn get_mountpoint_property(&self) -> Option<String> {
+        self.get_property(ZFS_PROP_MOUNTPOINT)
+    }
+
     /// Get a ZFS property for this dataset.
     fn get_property(&self, prop: c_int) -> Option<String> {
         const PROP_BUF_SIZE: usize = 1024;
@@ -666,7 +715,7 @@ impl Drop for Zpool {
 
 // Convenience type for already-validated ZFS dataset names that can be passed
 // directly to the FFI layer.
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct DatasetName {
     inner: CString,
 }
@@ -744,6 +793,18 @@ impl DatasetName {
             name[slash_pos + 1..].to_string()
         } else {
             name
+        }
+    }
+
+    /// Get the parent of this dataset.
+    pub fn parent(&self) -> Option<DatasetName> {
+        let name = self.to_string();
+        if let Some(index) = name.rfind('/') {
+            // This is safe to unwrap() because we've already validated it.
+            Some(DatasetName::new(&name[..index]).unwrap())
+        } else {
+            // No parent (this is a pool root dataset).
+            None
         }
     }
 }
@@ -864,6 +925,27 @@ mod tests {
         assert!(base.snapshot("").is_err()); // empty snapshot name
         assert!(base.snapshot("invalid name").is_err()); // space in snapshot name
     }
+
+    #[test]
+    fn test_dataset_parent() {
+        assert_eq!(DatasetName::new("rpool").unwrap().parent(), None);
+        assert_eq!(
+            DatasetName::new("rpool/ROOT/default")
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_string(),
+            "rpool/ROOT"
+        );
+        assert_eq!(
+            DatasetName::new("rpool/ROOT/default@backup")
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_string(),
+            "rpool/ROOT"
+        );
+    }
 }
 
 // libzfs FFI bindings
@@ -890,9 +972,11 @@ mod libzfs {
     pub const ZFS_TYPE_FILESYSTEM: c_int = 1 << 0;
     pub const ZFS_TYPE_SNAPSHOT: c_int = 1 << 1;
 
-    // ZFS property constants from libzfs.h
+    // ZFS property constants from sys/fs/zfs.h
     pub const ZFS_PROP_CREATION: c_int = 1;
     pub const ZFS_PROP_USED: c_int = 2;
+    pub const ZFS_PROP_MOUNTPOINT: c_int = 13;
+    pub const ZFS_PROP_CANMOUNT: c_int = 28;
 
     // ZPool property constants from sys/fs/zfs.h
     pub const ZPOOL_PROP_BOOTFS: c_int = 7;
