@@ -229,43 +229,22 @@ impl Client for LibZfsClient {
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
-        // Check if BE exists
-        if !self.be_exists(be_name)? {
-            return Err(Error::NotFound {
-                name: be_name.to_string(),
+        // Return error for temporary activation as it's not implemented yet.
+        if temporary {
+            return Err(Error::ZfsError {
+                message: "Temporary activation is not implemented".to_string(),
             });
         }
 
-        // In a real implementation, this would:
-        // - Update bootloader configuration (GRUB, loader.conf, etc.)
-        // - Set ZFS pool bootfs property if needed
-        // - Handle temporary vs permanent activation differently
-
-        if temporary {
-            // Set boot-once flag in bootloader
-            // This is highly system-specific (GRUB vs loader vs systemd-boot)
-        } else {
-            // Set permanent boot environment
-            // Update bootloader default entry
-        }
-
-        // For now, just return success
-        // Real implementation would handle bootloader integration
-        Ok(())
+        let dataset = self.root.append(be_name)?;
+        let zpool = Zpool::open(&self.lzh, &self.root.pool())?;
+        zpool.set_bootfs(&dataset)
     }
 
-    fn deactivate(&self, be_name: &str) -> Result<(), Error> {
-        // Check if BE exists
-        if !self.be_exists(be_name)? {
-            return Err(Error::NotFound {
-                name: be_name.to_string(),
-            });
-        }
-
-        // In a real implementation, this would remove temporary boot flags
-        // from bootloader configuration
-
-        Ok(())
+    fn deactivate(&self, _be_name: &str) -> Result<(), Error> {
+        Err(Error::ZfsError {
+            message: "Temporary activation is not implemented".to_string(),
+        })
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error> {
@@ -713,6 +692,19 @@ impl Zpool {
             None => None,
         }
     }
+
+    /// Set the bootfs property (which dataset boots by default).
+    pub fn set_bootfs(&self, dataset: &DatasetName) -> Result<(), Error> {
+        let prop = CString::new("bootfs").unwrap();
+        let result = unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), dataset.as_ptr()) };
+        if result != 0 {
+            Err(Error::ZfsError {
+                message: format!("failed to set 'bootfs' property to {}", dataset.to_string()),
+            })
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Drop for Zpool {
@@ -1143,6 +1135,11 @@ mod ffi {
             len: usize,
             source: *mut c_int,
             literal: c_int,
+        ) -> c_int;
+        pub fn zpool_set_prop(
+            zhp: *mut ZpoolHandle,
+            prop: *const c_char,
+            value: *const c_char,
         ) -> c_int;
     }
 }
