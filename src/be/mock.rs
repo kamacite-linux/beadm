@@ -1,5 +1,6 @@
 use chrono::Utc;
 use std::cell::RefCell;
+use std::path::PathBuf;
 
 use super::validation::validate_be_name;
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
@@ -192,7 +193,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn unmount(&self, target: &str, _force: bool) -> Result<(), Error> {
+    fn unmount(&self, target: &str, _force: bool) -> Result<Option<PathBuf>, Error> {
         let mut bes = self.bes.borrow_mut();
 
         // Target can be either a BE name or a mountpoint path
@@ -211,17 +212,10 @@ impl Client for EmulatorClient {
             }
         };
 
-        // Check if it's actually mounted
-        if be.mountpoint.is_none() {
-            return Err(Error::UnmountFailed {
-                name: be.name.to_string(),
-                reason: "not mounted".to_string(),
-            });
-        }
-
-        // Unmount the BE
+        // Get the mountpoint and unmount
+        let mountpoint = be.mountpoint.clone();
         be.mountpoint = None;
-        Ok(())
+        Ok(mountpoint)
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
@@ -718,8 +712,8 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         let result = client.unmount("test-be", false);
-        assert!(matches!(result, Err(Error::UnmountFailed { name, reason })
-            if name == "test-be" && reason == "not mounted"));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
     }
 
     #[test]

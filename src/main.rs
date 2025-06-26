@@ -1,5 +1,6 @@
 use chrono::{Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 mod be;
 
@@ -97,8 +98,8 @@ enum Commands {
     Mount {
         /// Boot environment name
         be_name: String,
-        /// Mount point
-        mountpoint: String,
+        /// Mount point (if not specified, creates temporary mount in /tmp)
+        mountpoint: Option<String>,
         /// Set read/write mode (ro or rw)
         #[arg(short = 's', long, default_value = "rw")]
         mode: MountMode,
@@ -344,6 +345,13 @@ fn print_boot_environments<T: Client>(
     Ok(())
 }
 
+/// Check if a mountpoint path looks like one of our temporary ones.
+fn is_temp_mountpoint(path: &PathBuf) -> bool {
+    let prefix = std::env::temp_dir().join("be_mount.");
+    // Safe to unwrap because we know the prefix is valid UTF-8.
+    path.to_string_lossy().starts_with(prefix.to_str().unwrap())
+}
+
 fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Error> {
     match command {
         Commands::Create {
@@ -410,8 +418,33 @@ fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Erro
             be_name,
             mountpoint,
             mode,
-        } => client.mount(be_name, mountpoint, *mode),
-        Commands::Unmount { target, force } => client.unmount(target, *force),
+        } => {
+            if let Some(mountpoint) = mountpoint {
+                client.mount(be_name, mountpoint, *mode)?;
+                return Ok(());
+            }
+
+            // If no mountpoint is specified, create a temporary one and write
+            // it to standard output for downstream consumption.
+            let mut temp_dir = tempfile::TempDir::with_prefix("be_mount.")?;
+            let temp_path = temp_dir.path().to_string_lossy().to_string();
+            client.mount(be_name, &temp_path, *mode)?;
+            temp_dir.disable_cleanup(true);
+            println!("{}", temp_path);
+            Ok(())
+        }
+        Commands::Unmount { target, force } => {
+            let mountpoint = client.unmount(target, *force)?;
+
+            // Check for temporary mountpoints we need to clean up.
+            if let Some(mp) = mountpoint {
+                if is_temp_mountpoint(&mp) {
+                    std::fs::remove_dir_all(&mp)?;
+                }
+            }
+
+            Ok(())
+        }
         Commands::Rename { be_name, new_name } => client.rename(be_name, new_name),
         Commands::Activate {
             be_name,
@@ -589,6 +622,15 @@ alt      -       -           8K     2021-06-10 02:11  Testing
             String::from_utf8(output).unwrap(),
             "temp-boot\tT\t\t8192\t1623301740\t\n"
         );
+    }
+
+    #[test]
+    fn test_is_temp_mountpoint() {
+        assert!(is_temp_mountpoint(
+            &std::env::temp_dir().join("be_mount.abc123")
+        ));
+        assert!(!is_temp_mountpoint(&PathBuf::from("/mnt/custom")));
+        assert!(!is_temp_mountpoint(&PathBuf::from("/")));
     }
 
     #[test]

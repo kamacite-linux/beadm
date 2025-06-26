@@ -208,12 +208,19 @@ impl Client for LibZfsClient {
         dataset.mount_at(&self.lzh, mountpoint)
     }
 
-    fn unmount(&self, be_name: &str, force: bool) -> Result<(), Error> {
+    fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error> {
         let be_path = self.root.append(be_name)?;
         let dataset = Dataset::boot_environment(&self.lzh, be_name, &be_path)?;
 
+        // Get the mountpoint before unmounting
+        let mountpoint = dataset.get_mountpoint();
+        if mountpoint.is_none() {
+            return Ok(None);
+        }
+
         // TODO: Support recursively unmounting child datasets.
-        dataset.unmount(&self.lzh, force)
+        dataset.unmount(&self.lzh, force)?;
+        Ok(mountpoint)
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {

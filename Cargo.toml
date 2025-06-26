@@ -8,3 +8,6 @@ clap = { version = "4.0", features = ["derive"] }
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
+tempfile = "3.0"
+
+[dev-dependencies]

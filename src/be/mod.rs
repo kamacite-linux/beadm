@@ -20,9 +20,6 @@ pub enum Error {
     #[error("Cannot destroy active boot environment '{name}'")]
     CannotDestroyActive { name: String },
 
-    #[error("Cannot unmount boot environment '{name}': {reason}")]
-    UnmountFailed { name: String, reason: String },
-
     #[error("Invalid boot environment name '{name}': {reason}")]
     InvalidName { name: String, reason: String },
 
@@ -148,7 +145,7 @@ pub trait Client {
 
     fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), Error>;
 
-    fn unmount(&self, target: &str, force: bool) -> Result<(), Error>;
+    fn unmount(&self, target: &str, force: bool) -> Result<Option<PathBuf>, Error>;
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error>;
 
