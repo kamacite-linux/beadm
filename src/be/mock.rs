@@ -218,6 +218,36 @@ impl Client for EmulatorClient {
         Ok(mountpoint)
     }
 
+    fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
+        let bes = self.bes.borrow();
+
+        // Find the boot environment
+        let be = match bes.iter().find(|be| be.name == be_name) {
+            Some(be) => be,
+            None => {
+                return Err(Error::NotFound {
+                    name: be_name.to_string(),
+                });
+            }
+        };
+
+        // Check if the BE is mounted
+        if be.mountpoint.is_none() {
+            return Err(Error::NotMounted {
+                name: be_name.to_string(),
+            });
+        }
+
+        // For the mock implementation, return a predictable hostid
+        // In a real implementation this would read from the BE's /etc/hostid
+        // Return None for BEs with "no-hostid" in the name to test that case
+        if be_name.contains("no-hostid") {
+            Ok(None)
+        } else {
+            Ok(Some(0x00deadbeef))
+        }
+    }
+
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
         validate_be_name(new_name, &self.root)?;
         let mut bes = self.bes.borrow_mut();
@@ -378,7 +408,9 @@ mod tests {
     #[test]
     fn test_emulated_new() {
         let client = EmulatorClient::sampled();
-        client.new("test-empty", Some("Empty BE"), None, &[]).unwrap();
+        client
+            .new("test-empty", Some("Empty BE"), None, &[])
+            .unwrap();
 
         let bes = client.get_boot_environments().unwrap();
         let test_be = bes.iter().find(|be| be.name == "test-empty").unwrap();
@@ -397,7 +429,9 @@ mod tests {
     fn test_emulated_new_with_host_id() {
         let client = EmulatorClient::sampled();
         // Host ID is accepted but ignored in the mock implementation
-        client.new("test-hostid", None, Some("test-host"), &[]).unwrap();
+        client
+            .new("test-hostid", None, Some("test-host"), &[])
+            .unwrap();
 
         let bes = client.get_boot_environments().unwrap();
         let test_be = bes.iter().find(|be| be.name == "test-hostid").unwrap();
@@ -714,6 +748,79 @@ mod tests {
         let result = client.unmount("test-be", false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_emulated_hostid() {
+        let test_be = BootEnvironment {
+            name: "test-be".to_string(),
+            path: "zfake/ROOT/test-be".to_string(),
+            description: None,
+            mountpoint: Some(PathBuf::from("/mnt/test")), // Make it mounted
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let client = EmulatorClient::new(vec![test_be]);
+
+        // Test hostid for existing mounted BE
+        let result = client.hostid("test-be");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(0xdeadbeef));
+
+        // Test hostid for non-existent BE
+        let result = client.hostid("non-existent");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
+    }
+
+    #[test]
+    fn test_emulated_hostid_not_found() {
+        let test_be = BootEnvironment {
+            name: "no-hostid-be".to_string(),
+            path: "zfake/ROOT/no-hostid-be".to_string(),
+            description: None,
+            mountpoint: Some(PathBuf::from("/mnt/test")), // Make it mounted
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let client = EmulatorClient::new(vec![test_be]);
+
+        // Test BE with no hostid (mounted)
+        let result = client.hostid("no-hostid-be");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_emulated_hostid_not_mounted() {
+        let test_be = BootEnvironment {
+            name: "unmounted-be".to_string(),
+            path: "zfake/ROOT/unmounted-be".to_string(),
+            description: None,
+            mountpoint: None, // Not mounted
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let client = EmulatorClient::new(vec![test_be]);
+
+        // Test hostid for unmounted BE - should return error
+        let result = client.hostid("unmounted-be");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), Error::NotMounted { name } if name == "unmounted-be")
+        );
     }
 
     #[test]

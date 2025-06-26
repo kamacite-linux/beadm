@@ -29,6 +29,9 @@ pub enum Error {
     #[error("Boot environment name '{name}' is currently mounted at '{mountpoint}'")]
     BeMounted { name: String, mountpoint: String },
 
+    #[error("Boot environment '{name}' must be mounted to access its contents")]
+    NotMounted { name: String },
+
     #[error("ZFS operation failed: {message}")]
     ZfsError { message: String },
 
@@ -66,6 +69,12 @@ impl Error {
         Error::InvalidProp {
             name: name.to_string(),
             value: value.to_string(),
+        }
+    }
+
+    pub fn not_mounted(name: &str) -> Self {
+        Error::NotMounted {
+            name: name.to_string(),
         }
     }
 }
@@ -146,6 +155,8 @@ pub trait Client {
     fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), Error>;
 
     fn unmount(&self, target: &str, force: bool) -> Result<Option<PathBuf>, Error>;
+
+    fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error>;
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error>;
 

@@ -223,6 +223,16 @@ impl Client for LibZfsClient {
         Ok(mountpoint)
     }
 
+    fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
+        let be_path = self.root.append(be_name)?;
+        let dataset = Dataset::boot_environment(&self.lzh, be_name, &be_path)?;
+        if let Some(mountpoint) = dataset.get_mountpoint() {
+            Ok(read_hostid(&mountpoint.join("etc/hostid")))
+        } else {
+            Err(Error::not_mounted(be_name))
+        }
+    }
+
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
         let new_path = self.root.append(new_name)?;
@@ -979,6 +989,24 @@ pub fn format_zfs_bytes(bytes: u64) -> String {
     String::from_utf8(buf).unwrap_or("-".to_string())
 }
 
+/// Read a host ID, usually from `/etc/hostid`.
+pub fn read_hostid(path: &Path) -> Option<u32> {
+    let hostid_bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return None,
+    };
+    if hostid_bytes.len() != 4 {
+        return None;
+    }
+    let hostid = u32::from_le_bytes([
+        hostid_bytes[0],
+        hostid_bytes[1],
+        hostid_bytes[2],
+        hostid_bytes[3],
+    ]);
+    Some(hostid)
+}
+
 /// Get the root ZFS filesystem, if any, from `/proc/mounts`.
 fn get_rootfs() -> Result<Option<DatasetName>, Error> {
     let file = File::open("/proc/mounts")?;
@@ -1099,6 +1127,32 @@ mod tests {
         };
         let err: Error = libzfs_err.into();
         assert_eq!(format!("{}", err), "no such pool or dataset");
+    }
+
+    #[test]
+    fn test_read_hostid() {
+        use std::io::Write;
+
+        let cases = [
+            (vec![0x0c, 0xb1, 0xba, 0x00], Some("0x00bab10c".to_string())), // ZFSBootMenu
+            (vec![0x00, 0x00, 0x00, 0x00], Some("0x00000000".to_string())),
+            (vec![0xff, 0xff, 0xff, 0xff], Some("0xffffffff".to_string())),
+            (vec![0xef, 0xbe, 0xad, 0xde], Some("0xdeadbeef".to_string())), // zgenhostid(8)
+            (vec![0x01, 0x02, 0x03], None),
+            (vec![0x01, 0x02, 0x03, 0x04, 0x05], None),
+            (vec![], None),
+        ];
+
+        for (bytes, expected) in cases {
+            let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+            temp_file.write_all(&bytes).unwrap();
+            temp_file.flush().unwrap();
+            let hostid = read_hostid(temp_file.path()).map(|hostid| format!("0x{:08x}", hostid));
+            assert_eq!(hostid, expected);
+        }
+
+        // Test with non-existent file
+        assert_eq!(read_hostid(Path::new("/path/that/does/not/exist")), None);
     }
 
     #[test]

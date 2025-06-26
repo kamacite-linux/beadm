@@ -137,6 +137,11 @@ enum Commands {
         /// Snapshot name
         snapshot: String,
     },
+    /// Get the host ID from a boot environment
+    Hostid {
+        /// Boot environment name
+        be_name: String,
+    },
 }
 
 /// Field to sort boot environments by when listing them.
@@ -458,6 +463,17 @@ fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Erro
             }
         }
         Commands::Rollback { be_name, snapshot } => client.rollback(be_name, snapshot),
+        Commands::Hostid { be_name } => {
+            match client.hostid(be_name)? {
+                Some(id) => println!("0x{:08x}", id),
+                None => {
+                    // TODO: Should probably be using anyhow here.
+                    eprintln!("No host ID found for '{}'.", be_name);
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
     }
 }
 
