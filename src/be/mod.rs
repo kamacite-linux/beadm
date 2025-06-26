@@ -1,5 +1,5 @@
 use clap::ValueEnum;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error as ThisError;
 
 pub mod mock;
@@ -46,6 +46,19 @@ impl Error {
     pub fn not_found(be_name: &str) -> Self {
         Error::NotFound {
             name: be_name.to_string(),
+        }
+    }
+
+    pub fn conflict(be_name: &str) -> Self {
+        Error::Conflict {
+            name: be_name.to_string(),
+        }
+    }
+
+    pub fn mounted(name: &str, mountpoint: &Path) -> Self {
+        Error::BeMounted {
+            name: name.to_string(),
+            mountpoint: mountpoint.display().to_string(),
         }
     }
 }

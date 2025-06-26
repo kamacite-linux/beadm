@@ -163,7 +163,7 @@ impl Client for LibZfsClient {
                 });
             } else {
                 // Best-effort attempt to unmount the dataset.
-                _ = dataset.unmount(true);
+                _ = dataset.unmount(&self.lzh, true);
             }
         }
 
@@ -172,60 +172,47 @@ impl Client for LibZfsClient {
 
     fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
-        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
+        let dataset = Dataset::boot_environment(&self.lzh, be_name, &be_path)?;
 
-        // Check if it's already mounted.
+        // Check if it's already mounted. Otherwise zfs_mount_at() seems to
+        // create a second mountpoint, which is not ideal.
         if let Some(existing) = dataset.get_mountpoint() {
-            return Err(Error::BeMounted {
-                name: be_name.to_string(),
-                mountpoint: existing.display().to_string(),
-            });
+            return Err(Error::mounted(be_name, &existing));
         }
 
         // TODO: Support recursively mounting child datasets.
-        // TODO: Better error mapping.
-        dataset.mount_at(mountpoint).map_err(|_| Error::ZfsError {
-            message: format!("Failed to mount boot environment '{}'", be_name),
-        })
+        dataset.mount_at(&self.lzh, mountpoint)
     }
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
-        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
-
-        // Don't unmount what isn't mounted.
-        if dataset.get_mountpoint().is_none() {
-            return Ok(());
-        }
+        let dataset = Dataset::boot_environment(&self.lzh, be_name, &be_path)?;
 
         // TODO: Support recursively unmounting child datasets.
-        // TODO: Better error mapping.
-        dataset.unmount(force).map_err(|_| Error::UnmountFailed {
-            name: be_name.to_string(),
-            reason: "ZFS unmount failed".to_string(),
-        })
+        dataset.unmount(&self.lzh, force)
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
         let new_path = self.root.append(new_name)?;
-
-        // Check if the target already exists.
-        if Dataset::filesystem(&self.lzh, &new_path).is_ok() {
-            return Err(Error::Conflict {
-                name: new_name.to_string(),
-            });
-        }
-
-        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
-        dataset.rename(
-            &new_path,
-            ffi::RenameFlags {
-                recursive: 0,
-                nounmount: 1, // Leave boot environment mounts in place.
-                forceunmount: 0,
-            },
-        )
+        let dataset = Dataset::boot_environment(&self.lzh, be_name, &be_path)?;
+        dataset
+            .rename(
+                &self.lzh,
+                &new_path,
+                ffi::RenameFlags {
+                    recursive: 0,
+                    nounmount: 1, // Leave boot environment mounts in place.
+                    forceunmount: 0,
+                },
+            )
+            .map_err(|err| {
+                // Special casing for EZFS_EEXIST.
+                if let Error::LibzfsError(LibzfsError { errno: 2008, .. }) = err {
+                    return Error::conflict(new_name);
+                }
+                err
+            })
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
@@ -407,12 +394,15 @@ impl Dataset {
     }
 
     // Rename this dataset.
-    pub fn rename(&self, new_name: &DatasetName, flags: ffi::RenameFlags) -> Result<(), Error> {
+    pub fn rename(
+        &self,
+        lzh: &LibHandle,
+        new_name: &DatasetName,
+        flags: ffi::RenameFlags,
+    ) -> Result<(), Error> {
         let result = unsafe { ffi::zfs_rename(self.handle, new_name.as_ptr(), flags) };
         if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to rename dataset".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(())
     }
@@ -429,19 +419,17 @@ impl Dataset {
     }
 
     /// Unmount this dataset with optional force flag.
-    pub fn unmount(&self, force: bool) -> Result<(), Error> {
+    pub fn unmount(&self, lzh: &LibHandle, force: bool) -> Result<(), Error> {
         let flags = if force { 1 } else { 0 };
         let result = unsafe { ffi::zfs_unmount(self.handle, ptr::null(), flags) };
         if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to unmount dataset".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(())
     }
 
     /// Mount this dataset at the specified path.
-    pub fn mount_at(&self, mountpoint: &str) -> Result<(), Error> {
+    pub fn mount_at(&self, lzh: &LibHandle, mountpoint: &str) -> Result<(), Error> {
         let c_mountpoint = CString::new(mountpoint).map_err(|_| Error::InvalidPath {
             path: mountpoint.to_string(),
         })?;
@@ -451,9 +439,7 @@ impl Dataset {
             // TODO: zfs_mount_at() sets regular ELOOP, ENOENT, ENOTDIR, EPERM,
             // EBUSY via errno. We should convert these to the relevant errors
             // rather than this generic one.
-            return Err(Error::ZfsError {
-                message: "Failed to mount dataset".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(())
     }
