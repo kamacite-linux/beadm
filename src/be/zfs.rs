@@ -237,8 +237,9 @@ impl Client for LibZfsClient {
         }
 
         let dataset = self.root.append(be_name)?;
+        Dataset::boot_environment(&self.lzh, be_name, &dataset)?; // Check existence.
         let zpool = Zpool::open(&self.lzh, &self.root.pool())?;
-        zpool.set_bootfs(&dataset)
+        zpool.set_bootfs(&self.lzh, &dataset)
     }
 
     fn deactivate(&self, _be_name: &str) -> Result<(), Error> {
@@ -322,9 +323,7 @@ impl Dataset {
     pub fn open(lzh: &LibHandle, name: &DatasetName, zfs_type: c_int) -> Result<Self, Error> {
         let handle = unsafe { ffi::zfs_open(lzh.handle, name.as_ptr(), zfs_type) };
         if handle.is_null() {
-            return Err(Error::NotFound {
-                name: name.to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(Dataset {
             handle,
@@ -340,6 +339,22 @@ impl Dataset {
     // Open a snapshot dataset.
     pub fn snapshot(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
         Dataset::open(lzh, name, ffi::ZFS_TYPE_SNAPSHOT)
+    }
+
+    // Open a filesystem dataset corresponding to a boot environment of the
+    // given name.
+    pub fn boot_environment(
+        lzh: &LibHandle,
+        be_name: &str,
+        path: &DatasetName,
+    ) -> Result<Self, Error> {
+        Dataset::filesystem(lzh, path).map_err(|err| {
+            // Special casing for EZFS_NOENT.
+            if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                return Error::not_found(be_name);
+            }
+            err
+        })
     }
 
     /// Create a Dataset from an existing handle. Closing the handle is the
@@ -654,9 +669,7 @@ impl Zpool {
     pub fn open(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
         let handle = unsafe { ffi::zpool_open(lzh.handle, name.as_ptr()) };
         if handle.is_null() {
-            return Err(Error::NotFound {
-                name: name.to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(Zpool { handle })
     }
@@ -694,13 +707,11 @@ impl Zpool {
     }
 
     /// Set the bootfs property (which dataset boots by default).
-    pub fn set_bootfs(&self, dataset: &DatasetName) -> Result<(), Error> {
+    pub fn set_bootfs(&self, lzh: &LibHandle, dataset: &DatasetName) -> Result<(), Error> {
         let prop = CString::new("bootfs").unwrap();
         let result = unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), dataset.as_ptr()) };
         if result != 0 {
-            Err(Error::ZfsError {
-                message: format!("failed to set 'bootfs' property to {}", dataset.to_string()),
-            })
+            Err(lzh.libzfs_error().into())
         } else {
             Ok(())
         }
@@ -829,6 +840,20 @@ impl LibHandle {
             Ok(Self { handle })
         }
     }
+
+    /// Get the current libzfs error.
+    pub fn libzfs_error(&self) -> LibzfsError {
+        let errno = unsafe { ffi::libzfs_errno(self.handle) };
+        let desc_ptr = unsafe { ffi::libzfs_error_description(self.handle) };
+        let description = if desc_ptr.is_null() {
+            // This should never happen (tm).
+            "unknown".to_string()
+        } else {
+            let cstr = unsafe { CStr::from_ptr(desc_ptr) };
+            cstr.to_string_lossy().to_string()
+        };
+        LibzfsError { errno, description }
+    }
 }
 
 impl Drop for LibHandle {
@@ -838,6 +863,21 @@ impl Drop for LibHandle {
         }
     }
 }
+
+/// Surfaces errors from the underlying libzfs library.
+#[derive(Debug)]
+pub struct LibzfsError {
+    pub errno: i32,
+    pub description: String,
+}
+
+impl std::fmt::Display for LibzfsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.description)
+    }
+}
+
+impl std::error::Error for LibzfsError {}
 
 /// Format a byte count using the same method as the standard ZFS CLI tools.
 pub fn format_zfs_bytes(bytes: u64) -> String {
@@ -971,6 +1011,16 @@ mod tests {
     }
 
     #[test]
+    fn test_libzfs_error() {
+        let libzfs_err = LibzfsError {
+            errno: 2009, // EZFS_NOENT
+            description: "no such pool or dataset".to_string(),
+        };
+        let err: Error = libzfs_err.into();
+        assert_eq!(format!("{}", err), "no such pool or dataset");
+    }
+
+    #[test]
     fn test_format_zfs_bytes() {
         // We're technically just testing a ZFS library function here, but
         // these are useful to have in case we ever need to write an
@@ -1052,6 +1102,10 @@ mod ffi {
         // Library initialization
         pub fn libzfs_init() -> *mut LibzfsHandle;
         pub fn libzfs_fini(hdl: *mut LibzfsHandle);
+
+        // Error handling
+        pub fn libzfs_errno(hdl: *mut LibzfsHandle) -> c_int;
+        pub fn libzfs_error_description(hdl: *mut LibzfsHandle) -> *const c_char;
 
         // Dataset handle management
         pub fn zfs_open(

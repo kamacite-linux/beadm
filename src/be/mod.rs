@@ -35,11 +35,19 @@ pub enum Error {
     #[error("ZFS operation failed: {message}")]
     ZfsError { message: String },
 
+    #[error(transparent)]
+    LibzfsError(#[from] zfs::LibzfsError),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
 
-    #[error("Operation not supported in no-op mode")]
-    NoOpError,
+impl Error {
+    pub fn not_found(be_name: &str) -> Self {
+        Error::NotFound {
+            name: be_name.to_string(),
+        }
+    }
 }
 
 /// Whether a boot environment is mounted read-write (the default) or
