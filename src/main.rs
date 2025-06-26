@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod be;
 
 use be::mock::EmulatorClient;
-use be::{BootEnvironment, Client, Error, MountMode, Snapshot, format_zfs_bytes};
+use be::zfs::{LibZfsClient, format_zfs_bytes};
+use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -337,15 +338,8 @@ fn print_boot_environments<T: Client>(
     Ok(())
 }
 
-fn main() {
-    let cli = Cli::parse();
-    let client = EmulatorClient::sampled();
-
-    if cli.verbose {
-        println!("Verbose mode enabled");
-    }
-
-    let result = match &cli.command {
+fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Error> {
+    match command {
         Commands::Create {
             be_name,
             activate,
@@ -354,18 +348,16 @@ fn main() {
             clone_from,
             property,
         } => {
-            let result = client.create(
+            client.create(
                 be_name,
                 description.as_deref(),
                 clone_from.as_deref(),
                 property,
-            );
-
-            if result.is_ok() && (*activate || *temp_activate) {
-                client.activate(be_name, *temp_activate)
-            } else {
-                result
+            )?;
+            if *activate || *temp_activate {
+                client.activate(be_name, *temp_activate)?;
             }
+            Ok(())
         }
         Commands::Destroy {
             target,
@@ -395,7 +387,7 @@ fn main() {
                 snapshots: *snapshots,
             };
 
-            print_boot_environments(&client, &mut std::io::stdout(), options)
+            print_boot_environments(client, &mut std::io::stdout(), options)
         }
         Commands::Mount {
             be_name,
@@ -416,12 +408,34 @@ fn main() {
             }
         }
         Commands::Rollback { be_name, snapshot } => client.rollback(be_name, snapshot),
-    };
-
-    if let Err(e) = result {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
     }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
+    // Opt-in to the mock client for integration testing.
+    let mock = std::env::var("MOCKING").unwrap_or_default() == "1";
+    if mock {
+        let client = EmulatorClient::sampled();
+        execute_command(&cli.command, &client)?;
+        return Ok(());
+    }
+
+    let client = match cli.beroot {
+        Some(root) => LibZfsClient::new(root)?,
+        None => match LibZfsClient::default()? {
+            Some(client) => client,
+            None => {
+                eprintln!(
+                    "Could not auto-detect boot environment root. Please specify with --beroot."
+                );
+                std::process::exit(1);
+            }
+        },
+    };
+    execute_command(&cli.command, &client)?;
+    Ok(())
 }
 
 #[cfg(test)]
