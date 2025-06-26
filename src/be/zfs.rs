@@ -8,8 +8,6 @@ use std::ptr;
 use super::validation::{validate_component, validate_dataset_name};
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
-use self::libzfs::*;
-
 /// A ZFS boot environment client backed by libzfs.
 pub struct LibZfsClient {
     root: DatasetName,
@@ -107,10 +105,10 @@ impl Client for LibZfsClient {
 
         // Create the ZFS filesystem
         let result = unsafe {
-            zfs_create(
+            ffi::zfs_create(
                 self.lzh.handle,
                 be_path.as_ptr(),
-                ZFS_TYPE_FILESYSTEM,
+                ffi::ZFS_TYPE_FILESYSTEM,
                 ptr::null_mut(),
             )
         };
@@ -222,7 +220,7 @@ impl Client for LibZfsClient {
         let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
         dataset.rename(
             &new_path,
-            RenameFlags {
+            ffi::RenameFlags {
                 recursive: 0,
                 nounmount: 1, // Leave boot environment mounts in place.
                 forceunmount: 0,
@@ -336,14 +334,14 @@ impl Client for LibZfsClient {
 
 /// Safe wrapper for various operations on a ZFS dataset handle.
 struct Dataset {
-    handle: *mut ZfsHandle,
+    handle: *mut ffi::ZfsHandle,
     owns_handle: bool,
 }
 
 impl Dataset {
     /// Open a ZFS dataset with the given name and type.
     pub fn open(lzh: &LibHandle, name: &DatasetName, zfs_type: c_int) -> Result<Self, Error> {
-        let handle = unsafe { zfs_open(lzh.handle, name.as_ptr(), zfs_type) };
+        let handle = unsafe { ffi::zfs_open(lzh.handle, name.as_ptr(), zfs_type) };
         if handle.is_null() {
             return Err(Error::NotFound {
                 name: name.to_string(),
@@ -357,17 +355,17 @@ impl Dataset {
 
     // Open a filesystem dataset.
     pub fn filesystem(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
-        Dataset::open(lzh, name, ZFS_TYPE_FILESYSTEM)
+        Dataset::open(lzh, name, ffi::ZFS_TYPE_FILESYSTEM)
     }
 
     // Open a snapshot dataset.
     pub fn snapshot(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
-        Dataset::open(lzh, name, ZFS_TYPE_SNAPSHOT)
+        Dataset::open(lzh, name, ffi::ZFS_TYPE_SNAPSHOT)
     }
 
     /// Create a Dataset from an existing handle. Closing the handle is the
     /// responsibility of the caller.
-    pub fn borrowed(handle: *mut ZfsHandle) -> Self {
+    pub fn borrowed(handle: *mut ffi::ZfsHandle) -> Self {
         Dataset {
             handle,
             owns_handle: false,
@@ -376,7 +374,7 @@ impl Dataset {
 
     /// Get the dataset name.
     pub fn get_name(&self) -> Option<DatasetName> {
-        let name_ptr = unsafe { zfs_get_name(self.handle) };
+        let name_ptr = unsafe { ffi::zfs_get_name(self.handle) };
         if name_ptr.is_null() {
             // The libzfs API claims this is not possible.
             return None;
@@ -389,7 +387,7 @@ impl Dataset {
     pub fn get_mountpoint(&self) -> Option<PathBuf> {
         let mut mountpoint_ptr: *mut std::os::raw::c_char = ptr::null_mut();
         let result = unsafe {
-            zfs_is_mounted(
+            ffi::zfs_is_mounted(
                 self.handle,
                 &mut mountpoint_ptr as *mut *mut std::os::raw::c_char,
             )
@@ -405,17 +403,18 @@ impl Dataset {
 
     /// Get the space used by this dataset.
     pub fn get_used_space(&self) -> u64 {
-        self.get_numeric_property(ZFS_PROP_USED).unwrap_or(0)
+        self.get_numeric_property(ffi::ZFS_PROP_USED).unwrap_or(0)
     }
 
     /// Get the creation timestamp for this dataset.
     pub fn get_creation_time(&self) -> i64 {
-        self.get_numeric_property(ZFS_PROP_CREATION).unwrap_or(0) as i64
+        self.get_numeric_property(ffi::ZFS_PROP_CREATION)
+            .unwrap_or(0) as i64
     }
 
     // Rename this dataset.
-    pub fn rename(&self, new_name: &DatasetName, flags: RenameFlags) -> Result<(), Error> {
-        let result = unsafe { zfs_rename(self.handle, new_name.as_ptr(), flags) };
+    pub fn rename(&self, new_name: &DatasetName, flags: ffi::RenameFlags) -> Result<(), Error> {
+        let result = unsafe { ffi::zfs_rename(self.handle, new_name.as_ptr(), flags) };
         if result != 0 {
             return Err(Error::ZfsError {
                 message: "Failed to rename dataset".to_string(),
@@ -426,7 +425,7 @@ impl Dataset {
 
     /// Destroy this dataset.
     pub fn destroy(&self) -> Result<(), Error> {
-        let result = unsafe { zfs_destroy(self.handle, 0) };
+        let result = unsafe { ffi::zfs_destroy(self.handle, 0) };
         if result != 0 {
             return Err(Error::ZfsError {
                 message: "Failed to destroy dataset".to_string(),
@@ -438,7 +437,7 @@ impl Dataset {
     /// Unmount this dataset with optional force flag.
     pub fn unmount(&self, force: bool) -> Result<(), Error> {
         let flags = if force { 1 } else { 0 };
-        let result = unsafe { zfs_unmount(self.handle, ptr::null(), flags) };
+        let result = unsafe { ffi::zfs_unmount(self.handle, ptr::null(), flags) };
         if result != 0 {
             return Err(Error::ZfsError {
                 message: "Failed to unmount dataset".to_string(),
@@ -452,7 +451,8 @@ impl Dataset {
         let c_mountpoint = CString::new(mountpoint).map_err(|_| Error::InvalidPath {
             path: mountpoint.to_string(),
         })?;
-        let result = unsafe { zfs_mount_at(self.handle, ptr::null(), 0, c_mountpoint.as_ptr()) };
+        let result =
+            unsafe { ffi::zfs_mount_at(self.handle, ptr::null(), 0, c_mountpoint.as_ptr()) };
         if result != 0 {
             // TODO: zfs_mount_at() sets regular ELOOP, ENOENT, ENOTDIR, EPERM,
             // EBUSY via errno. We should convert these to the relevant errors
@@ -466,7 +466,7 @@ impl Dataset {
 
     /// Rollback this dataset to the specified snapshot.
     pub fn rollback_to(&self, snapshot: &Dataset) -> Result<(), Error> {
-        let result = unsafe { zfs_rollback(self.handle, snapshot.handle, 0) };
+        let result = unsafe { ffi::zfs_rollback(self.handle, snapshot.handle, 0) };
         if result != 0 {
             return Err(Error::ZfsError {
                 message: "Failed to rollback dataset".to_string(),
@@ -493,7 +493,7 @@ impl Dataset {
         let data_ptr = &mut iter_data as *mut IterData<F>;
 
         extern "C" fn snapshot_callback<F>(
-            zhp: *mut ZfsHandle,
+            zhp: *mut ffi::ZfsHandle,
             data: *mut std::os::raw::c_void,
         ) -> std::os::raw::c_int
         where
@@ -512,7 +512,7 @@ impl Dataset {
         }
 
         let result = unsafe {
-            zfs_iter_snapshots(
+            ffi::zfs_iter_snapshots(
                 self.handle,
                 0, // simple = false for recursive iteration
                 snapshot_callback::<F>,
@@ -554,7 +554,7 @@ impl Dataset {
         let data_ptr = &mut iter_data as *mut IterData<F>;
 
         extern "C" fn children_callback<F>(
-            zhp: *mut ZfsHandle,
+            zhp: *mut ffi::ZfsHandle,
             data: *mut std::os::raw::c_void,
         ) -> std::os::raw::c_int
         where
@@ -573,7 +573,7 @@ impl Dataset {
         }
 
         let result = unsafe {
-            zfs_iter_children(
+            ffi::zfs_iter_children(
                 self.handle,
                 children_callback::<F>,
                 data_ptr as *mut std::os::raw::c_void,
@@ -605,12 +605,12 @@ impl Dataset {
 
     /// Get the canmount property of this dataset.
     pub fn get_canmount(&self) -> Option<String> {
-        self.get_property(ZFS_PROP_CANMOUNT)
+        self.get_property(ffi::ZFS_PROP_CANMOUNT)
     }
 
     /// Get the mountpoint property of this dataset.
     pub fn get_mountpoint_property(&self) -> Option<String> {
-        self.get_property(ZFS_PROP_MOUNTPOINT)
+        self.get_property(ffi::ZFS_PROP_MOUNTPOINT)
     }
 
     /// Get a ZFS property for this dataset.
@@ -618,7 +618,7 @@ impl Dataset {
         const PROP_BUF_SIZE: usize = 1024;
         let mut buf = vec![0u8; PROP_BUF_SIZE];
         let result = unsafe {
-            zfs_prop_get(
+            ffi::zfs_prop_get(
                 self.handle,
                 prop,
                 buf.as_mut_ptr() as *mut std::os::raw::c_char,
@@ -641,7 +641,7 @@ impl Dataset {
     fn get_numeric_property(&self, prop: c_int) -> Option<u64> {
         let mut value: u64 = 0;
         let result = unsafe {
-            zfs_prop_get_numeric(
+            ffi::zfs_prop_get_numeric(
                 self.handle,
                 prop,
                 &mut value as *mut u64,
@@ -660,20 +660,20 @@ impl Drop for Dataset {
             return;
         }
         unsafe {
-            zfs_close(self.handle);
+            ffi::zfs_close(self.handle);
         }
     }
 }
 
 /// Safe wrapper for zpool operations.
 struct Zpool {
-    handle: *mut ZpoolHandle,
+    handle: *mut ffi::ZpoolHandle,
 }
 
 impl Zpool {
     /// Open a zpool by name.
     pub fn open(lzh: &LibHandle, name: &DatasetName) -> Result<Self, Error> {
-        let handle = unsafe { zpool_open(lzh.handle, name.as_ptr()) };
+        let handle = unsafe { ffi::zpool_open(lzh.handle, name.as_ptr()) };
         if handle.is_null() {
             return Err(Error::NotFound {
                 name: name.to_string(),
@@ -687,7 +687,7 @@ impl Zpool {
         const PROP_BUF_SIZE: usize = 1024;
         let mut buf = vec![0u8; PROP_BUF_SIZE];
         let result = unsafe {
-            zpool_get_prop(
+            ffi::zpool_get_prop(
                 self.handle,
                 prop,
                 buf.as_mut_ptr() as *mut std::os::raw::c_char,
@@ -708,7 +708,7 @@ impl Zpool {
 
     /// Get the bootfs property (which dataset boots by default).
     pub fn get_bootfs(&self) -> Option<DatasetName> {
-        match self.get_property(ZPOOL_PROP_BOOTFS) {
+        match self.get_property(ffi::ZPOOL_PROP_BOOTFS) {
             Some(fs) => DatasetName::new(&fs).map_or(None, |ds| Some(ds)),
             None => None,
         }
@@ -719,7 +719,7 @@ impl Drop for Zpool {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe {
-                zpool_close(self.handle);
+                ffi::zpool_close(self.handle);
             }
         }
     }
@@ -823,12 +823,12 @@ impl DatasetName {
 
 // Wraps the libzfs handle to manage its lifetime.
 struct LibHandle {
-    pub handle: *mut LibzfsHandle,
+    pub handle: *mut ffi::LibzfsHandle,
 }
 
 impl LibHandle {
     pub fn new() -> Result<Self, Error> {
-        let handle = unsafe { libzfs_init() };
+        let handle = unsafe { ffi::libzfs_init() };
         if handle.is_null() {
             Err(Error::ZfsError {
                 message: "failed to initialize libzfs".to_string(),
@@ -842,7 +842,7 @@ impl LibHandle {
 impl Drop for LibHandle {
     fn drop(&mut self) {
         unsafe {
-            libzfs_fini(self.handle);
+            ffi::libzfs_fini(self.handle);
         }
     }
 }
@@ -853,7 +853,7 @@ pub fn format_zfs_bytes(bytes: u64) -> String {
     const BUF_SIZE: usize = 6;
     let mut buf = vec![0u8; BUF_SIZE];
     unsafe {
-        zfs_nicebytes(
+        ffi::zfs_nicebytes(
             bytes,
             buf.as_mut_ptr() as *mut std::os::raw::c_char,
             BUF_SIZE,
@@ -1012,7 +1012,7 @@ mod tests {
 }
 
 // libzfs FFI bindings
-mod libzfs {
+mod ffi {
     use std::os::raw::{c_char, c_int, c_uint, c_void};
 
     // Opaque handle types matching libzfs
