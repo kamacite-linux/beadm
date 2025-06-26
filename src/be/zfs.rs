@@ -135,6 +135,7 @@ impl Client for LibZfsClient {
         _snapshots: bool,
     ) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
+        let dataset = Dataset::boot_environment(&self.lzh, be_name, &be_path)?;
 
         // Cannot destroy the active or next boot environment.
         if let Some(rootfs) = get_rootfs()? {
@@ -152,8 +153,6 @@ impl Client for LibZfsClient {
             }
         }
 
-        let dataset = Dataset::filesystem(&self.lzh, &be_path)?;
-
         let mountpoint = dataset.get_mountpoint();
         if mountpoint.is_some() {
             if !force_unmount {
@@ -167,7 +166,7 @@ impl Client for LibZfsClient {
             }
         }
 
-        dataset.destroy()
+        dataset.destroy(&self.lzh)
     }
 
     fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
@@ -408,12 +407,10 @@ impl Dataset {
     }
 
     /// Destroy this dataset.
-    pub fn destroy(&self) -> Result<(), Error> {
+    pub fn destroy(&self, lzh: &LibHandle) -> Result<(), Error> {
         let result = unsafe { ffi::zfs_destroy(self.handle, 0) };
         if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to destroy dataset".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(())
     }
