@@ -73,6 +73,37 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
+    fn new(
+        &self,
+        be_name: &str,
+        description: Option<&str>,
+        _host_id: Option<&str>,
+        _properties: &[String],
+    ) -> Result<(), Error> {
+        let mut bes = self.bes.borrow_mut();
+
+        // Check for conflicts.
+        if bes.iter().any(|be| be.name == be_name) {
+            return Err(Error::Conflict {
+                name: be_name.to_string(),
+            });
+        }
+
+        // Create new empty boot environment
+        bes.push(BootEnvironment {
+            name: be_name.to_string(),
+            path: format!("{}/{}", self.root, be_name),
+            description: description.map(|s| s.to_string()),
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192, // ZFS datasets consume 8K to start.
+            created: Utc::now().timestamp(),
+        });
+        Ok(())
+    }
+
     fn destroy(
         &self,
         target: &str,
@@ -349,6 +380,35 @@ fn sample_snapshots(be_name: &str) -> Vec<Snapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_emulated_new() {
+        let client = EmulatorClient::sampled();
+        client.new("test-empty", Some("Empty BE"), None, &[]).unwrap();
+
+        let bes = client.get_boot_environments().unwrap();
+        let test_be = bes.iter().find(|be| be.name == "test-empty").unwrap();
+        assert_eq!(test_be.description, Some("Empty BE".to_string()));
+        assert_eq!(test_be.space, 8192);
+    }
+
+    #[test]
+    fn test_emulated_new_conflict() {
+        let client = EmulatorClient::sampled();
+        let result = client.new("default", Some("Empty BE"), None, &[]);
+        assert!(matches!(result, Err(Error::Conflict { .. })));
+    }
+
+    #[test]
+    fn test_emulated_new_with_host_id() {
+        let client = EmulatorClient::sampled();
+        // Host ID is accepted but ignored in the mock implementation
+        client.new("test-hostid", None, Some("test-host"), &[]).unwrap();
+
+        let bes = client.get_boot_environments().unwrap();
+        let test_be = bes.iter().find(|be| be.name == "test-hostid").unwrap();
+        assert_eq!(test_be.description, None);
+    }
 
     #[test]
     fn test_emulated_create() {

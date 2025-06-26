@@ -130,6 +130,14 @@ pub trait Client {
         properties: &[String],
     ) -> Result<(), Error>;
 
+    fn new(
+        &self,
+        be_name: &str,
+        description: Option<&str>,
+        host_id: Option<&str>,
+        properties: &[String],
+    ) -> Result<(), Error>;
+
     fn destroy(
         &self,
         target: &str,

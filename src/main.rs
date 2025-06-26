@@ -46,6 +46,12 @@ enum Commands {
         /// Clone from existing BE or snapshot
         #[arg(short = 'e', long)]
         clone_from: Option<String>,
+        /// Create an empty boot environment instead of cloning
+        #[arg(long)]
+        empty: bool,
+        /// Set the host ID for empty boot environments
+        #[arg(long)]
+        host_id: Option<String>,
         /// Set ZFS properties (property=value)
         #[arg(short = 'o', long)]
         property: Vec<String>,
@@ -346,14 +352,25 @@ fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Erro
             temp_activate,
             description,
             clone_from,
+            empty,
+            host_id,
             property,
         } => {
-            client.create(
-                be_name,
-                description.as_deref(),
-                clone_from.as_deref(),
-                property,
-            )?;
+            if *empty {
+                client.new(
+                    be_name,
+                    description.as_deref(),
+                    host_id.as_deref(),
+                    property,
+                )?;
+            } else {
+                client.create(
+                    be_name,
+                    description.as_deref(),
+                    clone_from.as_deref(),
+                    property,
+                )?;
+            }
             if *activate || *temp_activate {
                 client.activate(be_name, *temp_activate)?;
             }

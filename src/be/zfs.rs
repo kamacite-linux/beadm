@@ -8,6 +8,9 @@ use std::ptr;
 use super::validation::{validate_component, validate_dataset_name};
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
+// TODO: This isn't a great name.
+const DESCRIPTION_PROP: &str = "beadm:description";
+
 /// A ZFS boot environment client backed by libzfs.
 pub struct LibZfsClient {
     root: DatasetName,
@@ -125,6 +128,28 @@ impl Client for LibZfsClient {
         }
 
         Ok(())
+    }
+
+    fn new(
+        &self,
+        be_name: &str,
+        description: Option<&str>,
+        _host_id: Option<&str>,
+        _properties: &[String],
+    ) -> Result<(), Error> {
+        let mut props = NvList::from(&[("canmount", "noauto"), ("mountpoint", "/")])?;
+        if let Some(desc) = description {
+            props.add_string(DESCRIPTION_PROP, desc)?;
+        }
+
+        let be_path = self.root.append(be_name)?;
+        Dataset::create(&self.lzh, &be_path, &props).map_err(|err| {
+            // Special casing for EZFS_EEXIST.
+            if let Error::LibzfsError(LibzfsError { errno: 2008, .. }) = err {
+                return Error::conflict(be_name);
+            }
+            err
+        })
     }
 
     fn destroy(
@@ -350,6 +375,22 @@ impl Dataset {
             handle,
             owns_handle: false,
         }
+    }
+
+    /// Create a new ZFS filesystem.
+    pub fn create(lzh: &LibHandle, name: &DatasetName, properties: &NvList) -> Result<(), Error> {
+        let result = unsafe {
+            ffi::zfs_create(
+                lzh.handle,
+                name.as_ptr(),
+                ffi::ZFS_TYPE_FILESYSTEM,
+                properties.as_ptr(),
+            )
+        };
+        if result != 0 {
+            return Err(lzh.libzfs_error().into());
+        }
+        Ok(())
     }
 
     /// Get the dataset name.
