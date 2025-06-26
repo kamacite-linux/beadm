@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, OsStr, c_char, c_int};
+use std::ffi::{CStr, CString, OsStr, c_char, c_int, c_void};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
@@ -862,6 +862,56 @@ impl std::fmt::Display for LibzfsError {
 
 impl std::error::Error for LibzfsError {}
 
+/// Wraps an nvlist to manage its lifetime.
+struct NvList {
+    nvl: *mut ffi::NvList,
+}
+
+impl NvList {
+    pub fn new() -> Result<Self, Error> {
+        let mut nvl: *mut ffi::NvList = ptr::null_mut();
+        let result =
+            unsafe { ffi::nvlist_alloc(&mut nvl as *mut *mut ffi::NvList, ffi::NV_UNIQUE_NAME, 0) };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result).into());
+        }
+        if nvl.is_null() {
+            let err: std::io::Error = std::io::ErrorKind::OutOfMemory.into();
+            return Err(err.into());
+        }
+        Ok(NvList { nvl })
+    }
+
+    pub fn from(pairs: &[(&str, &str)]) -> Result<Self, Error> {
+        let mut nvl = Self::new()?;
+        for (key, value) in pairs {
+            nvl.add_string(key, value)?;
+        }
+        Ok(nvl)
+    }
+
+    pub fn add_string(&mut self, name: &str, value: &str) -> Result<(), Error> {
+        let name_cstr = CString::new(name).map_err(|_| Error::invalid_prop(name, value))?;
+        let value_cstr = CString::new(value).map_err(|_| Error::invalid_prop(name, value))?;
+        let result =
+            unsafe { ffi::nvlist_add_string(self.nvl, name_cstr.as_ptr(), value_cstr.as_ptr()) };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result).into());
+        }
+        Ok(())
+    }
+
+    fn as_ptr(&self) -> *mut c_void {
+        self.nvl as *mut c_void
+    }
+}
+
+impl Drop for NvList {
+    fn drop(&mut self) {
+        unsafe { ffi::nvlist_free(self.nvl) };
+    }
+}
+
 /// Format a byte count using the same method as the standard ZFS CLI tools.
 pub fn format_zfs_bytes(bytes: u64) -> String {
     // zfs_nicebytes is guaranteed to return something that fits in five bytes.
@@ -1004,6 +1054,20 @@ mod tests {
     }
 
     #[test]
+    fn test_nvlist() {
+        assert!(
+            NvList::from(&[
+                ("canmount", "noauto"),
+                ("mountpoint", "none"),
+                ("compression", "lz4"),
+            ])
+            .is_ok()
+        );
+        assert!(NvList::from(&[("invalid\0key", "value")]).is_err());
+        assert!(NvList::from(&[("key", "invalid\0value")]).is_err());
+    }
+
+    #[test]
     fn test_format_zfs_bytes() {
         // We're technically just testing a ZFS library function here, but
         // these are useful to have in case we ever need to write an
@@ -1056,6 +1120,11 @@ mod ffi {
         _opaque: [u8; 0],
     }
 
+    #[repr(C)]
+    pub struct NvList {
+        _opaque: [u8; 0],
+    }
+
     // ZFS type constants from sys/fs/zfs.h
     pub const ZFS_TYPE_FILESYSTEM: c_int = 1 << 0;
     pub const ZFS_TYPE_SNAPSHOT: c_int = 1 << 1;
@@ -1068,6 +1137,9 @@ mod ffi {
 
     // ZPool property constants from sys/fs/zfs.h
     pub const ZPOOL_PROP_BOOTFS: c_int = 7;
+
+    // NvList constants
+    pub const NV_UNIQUE_NAME: c_uint = 0x1;
 
     // ZFS property type (placeholder - we'd need to define proper enum)
     pub type ZfsProp = c_int;
@@ -1161,6 +1233,15 @@ mod ffi {
 
         // Utility functions
         pub fn zfs_nicebytes(bytes: u64, buf: *mut c_char, len: usize);
+
+        // NvList functions for property management
+        pub fn nvlist_alloc(nvlp: *mut *mut NvList, nvflag: c_uint, kmflag: c_int) -> c_int;
+        pub fn nvlist_add_string(
+            nvl: *mut NvList,
+            name: *const c_char,
+            val: *const c_char,
+        ) -> c_int;
+        pub fn nvlist_free(nvl: *mut NvList);
 
         // ZPool functions
         pub fn zpool_open(hdl: *mut LibzfsHandle, name: *const c_char) -> *mut ZpoolHandle;

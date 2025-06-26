@@ -35,6 +35,9 @@ pub enum Error {
     #[error("ZFS operation failed: {message}")]
     ZfsError { message: String },
 
+    #[error("Invalid property '{name}={value}'")]
+    InvalidProp { name: String, value: String },
+
     #[error(transparent)]
     LibzfsError(#[from] zfs::LibzfsError),
 
@@ -59,6 +62,13 @@ impl Error {
         Error::BeMounted {
             name: name.to_string(),
             mountpoint: mountpoint.display().to_string(),
+        }
+    }
+
+    pub fn invalid_prop(name: &str, value: &str) -> Self {
+        Error::InvalidProp {
+            name: name.to_string(),
+            value: value.to_string(),
         }
     }
 }
