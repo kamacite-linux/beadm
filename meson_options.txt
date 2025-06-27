@@ -1,0 +1,7 @@
+# -*- meson-indent-basic: 8 -*-
+
+option('profile',
+       type : 'combo',
+       choices : ['debug', 'release'],
+       value : 'release',
+       description : 'Cargo build profile')
