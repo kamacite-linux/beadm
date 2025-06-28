@@ -25,6 +25,10 @@ struct Cli {
     #[arg(short = 'v', long = "verbose", global = true, group = "Global options")]
     verbose: bool,
 
+    /// Client implementation
+    #[arg(long = "client", global = true, default_value = "libzfs")]
+    client: ClientType,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -153,6 +157,17 @@ enum SortField {
     Date,
     /// Sort by space.
     Space,
+}
+
+/// Client selection.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum ClientType {
+    /// Use LibZFS directly.
+    #[value(name = "libzfs")]
+    LibZfs,
+    /// Use a mock/emulator client (for testing).
+    #[value(name = "mock")]
+    Mock,
 }
 
 /// A row in `beadm list` output, either a boot environment or a snapshot.
@@ -480,27 +495,28 @@ fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Erro
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    // Opt-in to the mock client for integration testing.
-    let mock = std::env::var("MOCKING").unwrap_or_default() == "1";
-    if mock {
-        let client = EmulatorClient::sampled();
-        execute_command(&cli.command, &client)?;
-        return Ok(());
+    match cli.client {
+        ClientType::Mock => {
+            let client = EmulatorClient::sampled();
+            execute_command(&cli.command, &client)?;
+        }
+        ClientType::LibZfs => {
+            let client = match cli.beroot {
+                Some(root) => LibZfsClient::new(root)?,
+                None => match LibZfsClient::default()? {
+                    Some(client) => client,
+                    None => {
+                        eprintln!(
+                            "Could not auto-detect boot environment root. Please specify with --beroot."
+                        );
+                        std::process::exit(1);
+                    }
+                },
+            };
+            execute_command(&cli.command, &client)?;
+        }
     }
 
-    let client = match cli.beroot {
-        Some(root) => LibZfsClient::new(root)?,
-        None => match LibZfsClient::default()? {
-            Some(client) => client,
-            None => {
-                eprintln!(
-                    "Could not auto-detect boot environment root. Please specify with --beroot."
-                );
-                std::process::exit(1);
-            }
-        },
-    };
-    execute_command(&cli.command, &client)?;
     Ok(())
 }
 
