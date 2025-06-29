@@ -3,10 +3,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 mod be;
+mod dbus;
 
 use be::mock::EmulatorClient;
 use be::zfs::{LibZfsClient, format_zfs_bytes};
 use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
+use dbus::{RemoteClient, serve};
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -146,6 +148,12 @@ enum Commands {
         /// Boot environment name
         be_name: String,
     },
+    /// Start the boot environment D-Bus server
+    Serve {
+        /// Run on the session bus instead of the system bus
+        #[arg(long)]
+        user: bool,
+    },
 }
 
 /// Field to sort boot environments by when listing them.
@@ -162,6 +170,9 @@ enum SortField {
 /// Client selection.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum ClientType {
+    /// Use the D-Bus client.
+    #[value(name = "dbus")]
+    DBus,
     /// Use LibZFS directly.
     #[value(name = "libzfs")]
     LibZfs,
@@ -372,7 +383,7 @@ fn is_temp_mountpoint(path: &PathBuf) -> bool {
     path.to_string_lossy().starts_with(prefix.to_str().unwrap())
 }
 
-fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Error> {
+fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result<(), Error> {
     match command {
         Commands::Create {
             be_name,
@@ -432,7 +443,7 @@ fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Erro
                 snapshots: *snapshots,
             };
 
-            print_boot_environments(client, &mut std::io::stdout(), options)
+            print_boot_environments(&client, &mut std::io::stdout(), options)
         }
         Commands::Mount {
             be_name,
@@ -489,6 +500,12 @@ fn execute_command<T: Client>(command: &Commands, client: &T) -> Result<(), Erro
             }
             Ok(())
         }
+        Commands::Serve { user } => {
+            serve(client, *user).map_err(|e| Error::ZfsError {
+                message: format!("D-Bus server error: {}", e),
+            })?;
+            Ok(())
+        }
     }
 }
 
@@ -498,7 +515,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.client {
         ClientType::Mock => {
             let client = EmulatorClient::sampled();
-            execute_command(&cli.command, &client)?;
+            execute_command(&cli.command, client)?;
+        }
+        ClientType::DBus => {
+            let client = RemoteClient::new(false)?; // Use system bus by default
+            execute_command(&cli.command, client)?;
         }
         ClientType::LibZfs => {
             let client = match cli.beroot {
@@ -513,7 +534,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 },
             };
-            execute_command(&cli.command, &client)?;
+            execute_command(&cli.command, client)?;
         }
     }
 

@@ -9,5 +9,6 @@ thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 libc = "0.2"
 tempfile = "3.0"
+zbus = { version = "5.0", features = ["blocking-api"] }
 
 [dev-dependencies]

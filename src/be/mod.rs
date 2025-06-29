@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error as ThisError;
 
 pub mod mock;
+pub mod threadsafe;
 pub mod validation;
 pub mod zfs;
 
