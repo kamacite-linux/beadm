@@ -8,21 +8,20 @@ use zbus::blocking::ObjectServer;
 use zbus::blocking::{Connection, connection};
 use zbus::object_server::SignalEmitter;
 use zbus::{Result as ZbusResult, interface};
+use zvariant::ObjectPath;
 
-/// Sanitize a boot environment name for use in D-Bus object paths
-/// D-Bus object paths can only contain [A-Za-z0-9_/]
-fn sanitize_be_name(name: &str) -> String {
-    name.chars()
+/// Translate a boot environment name to a D-Bus object path.
+fn be_object_path(name: &str) -> ObjectPath<'static> {
+    // D-Bus object paths can only contain [A-Za-z0-9_/].
+    let sanitised: String = name
+        .chars()
         .map(|c| match c {
             'A'..='Z' | 'a'..='z' | '0'..='9' | '_' => c,
             _ => '_',
         })
-        .collect()
-}
-
-/// Generate D-Bus object path for a boot environment
-fn be_object_path(name: &str) -> String {
-    format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(name))
+        .collect();
+    // This is safe to unwrap because we've already sanitised the name.
+    ObjectPath::try_from(format!("/org/beadm/BootEnvironments/{}", sanitised)).unwrap()
 }
 
 // ============================================================================
@@ -105,16 +104,13 @@ impl Client for RemoteClient {
         force_no_verify: bool,
         snapshots: bool,
     ) -> Result<(), BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(target));
-
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            object_path.as_str(),
+            &be_object_path(target),
             Some("org.beadm.BootEnvironment"),
             "destroy",
             &(force_unmount, force_no_verify, snapshots),
         )?;
-
         Ok(())
     }
 
@@ -123,28 +119,22 @@ impl Client for RemoteClient {
             MountMode::ReadOnly => true,
             MountMode::ReadWrite => false,
         };
-
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            object_path.as_str(),
+            &be_object_path(be_name),
             Some("org.beadm.BootEnvironment"),
             "mount",
             &(mountpoint, read_only),
         )?;
-
         Ok(())
     }
 
     fn unmount(&self, target: &str, force: bool) -> Result<Option<PathBuf>, BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(target));
-
         let result: String = self
             .connection
             .call_method(
                 Some("org.beadm.Manager"),
-                object_path.as_str(),
+                &be_object_path(target),
                 Some("org.beadm.BootEnvironment"),
                 "unmount",
                 &(force,),
@@ -160,13 +150,11 @@ impl Client for RemoteClient {
     }
 
     fn hostid(&self, be_name: &str) -> Result<Option<u32>, BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         let hostid: u32 = self
             .connection
             .call_method(
                 Some("org.beadm.Manager"),
-                object_path.as_str(),
+                &be_object_path(be_name),
                 Some("org.beadm.BootEnvironment"),
                 "get_hostid",
                 &(),
@@ -182,58 +170,46 @@ impl Client for RemoteClient {
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            object_path.as_str(),
+            &be_object_path(be_name),
             Some("org.beadm.BootEnvironment"),
             "rename",
             &(new_name,),
         )?;
-
         Ok(())
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            object_path.as_str(),
+            &be_object_path(be_name),
             Some("org.beadm.BootEnvironment"),
             "activate",
             &(temporary,),
         )?;
-
         Ok(())
     }
 
     fn deactivate(&self, be_name: &str) -> Result<(), BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            object_path.as_str(),
+            &be_object_path(be_name),
             Some("org.beadm.BootEnvironment"),
             "deactivate",
             &(),
         )?;
-
         Ok(())
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            object_path.as_str(),
+            &be_object_path(be_name),
             Some("org.beadm.BootEnvironment"),
             "rollback",
             &(snapshot,),
         )?;
-
         Ok(())
     }
 
@@ -374,13 +350,11 @@ impl Client for RemoteClient {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, BeError> {
-        let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
-
         let snapshots_data: Vec<(String, String, u64, i64)> = self
             .connection
             .call_method(
                 Some("org.beadm.Manager"),
-                object_path.as_str(),
+                &be_object_path(be_name),
                 Some("org.beadm.BootEnvironment"),
                 "get_snapshots",
                 &(),
@@ -677,7 +651,7 @@ impl BeadmManager {
         description: &str,
         source: &str,
         properties: Vec<String>,
-    ) -> zbus::fdo::Result<String> {
+    ) -> zbus::fdo::Result<ObjectPath<'static>> {
         let desc = if description.is_empty() {
             None
         } else {
@@ -701,7 +675,7 @@ impl BeadmManager {
         description: &str,
         host_id: &str,
         properties: Vec<String>,
-    ) -> zbus::fdo::Result<String> {
+    ) -> zbus::fdo::Result<ObjectPath<'static>> {
         let desc = if description.is_empty() {
             None
         } else {
@@ -879,22 +853,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sanitize_be_name() {
-        assert_eq!(sanitize_be_name("default"), "default");
-        assert_eq!(sanitize_be_name("test-be"), "test_be");
-        assert_eq!(sanitize_be_name("test.be"), "test_be");
-        assert_eq!(sanitize_be_name("test@snapshot"), "test_snapshot");
-        assert_eq!(sanitize_be_name("test/path"), "test_path");
-    }
-
-    #[test]
     fn test_be_object_path() {
         assert_eq!(
-            be_object_path("default"),
+            be_object_path("default").as_str(),
             "/org/beadm/BootEnvironments/default"
         );
         assert_eq!(
-            be_object_path("test-be"),
+            be_object_path("test-be").as_str(),
             "/org/beadm/BootEnvironments/test_be"
         );
     }

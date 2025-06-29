@@ -222,6 +222,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "zbus",
+ "zvariant",
 ]
 
 [[package]]
