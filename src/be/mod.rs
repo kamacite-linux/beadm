@@ -44,6 +44,31 @@ pub enum Error {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("D-Bus error: {0}")]
+    ZbusError(#[from] zbus::Error),
+}
+
+impl From<Error> for zbus::fdo::Error {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::NotFound { .. } => zbus::fdo::Error::UnknownObject(err.to_string()),
+            Error::InvalidName { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
+            Error::InvalidPath { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
+            Error::InvalidProp { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
+            Error::ZbusError(ref e) => match e {
+                zbus::Error::FDO(fdo_err) => *fdo_err.clone(),
+                _ => zbus::fdo::Error::Failed(err.to_string()),
+            },
+            _ => zbus::fdo::Error::Failed(err.to_string()),
+        }
+    }
+}
+
+impl From<Error> for zbus::Error {
+    fn from(err: Error) -> Self {
+        zbus::Error::Failure(err.to_string())
+    }
 }
 
 impl Error {

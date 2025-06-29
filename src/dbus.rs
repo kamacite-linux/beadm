@@ -39,10 +39,7 @@ impl RemoteClient {
             Connection::session()
         } else {
             Connection::system()
-        }
-        .map_err(|e| BeError::ZfsError {
-            message: format!("Failed to connect to D-Bus: {}", e),
-        })?;
+        }?;
 
         Ok(Self { connection })
     }
@@ -68,15 +65,9 @@ impl Client for RemoteClient {
                 Some("org.beadm.Manager"),
                 "create",
                 &(be_name, desc, src, props),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?
+            )?
             .body()
-            .deserialize()
-            .map_err(|e| BeError::ZfsError {
-                message: format!("Failed to deserialize response: {}", e),
-            })?;
+            .deserialize()?;
 
         Ok(())
     }
@@ -100,15 +91,9 @@ impl Client for RemoteClient {
                 Some("org.beadm.Manager"),
                 "create_new",
                 &(be_name, desc, hid, props),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?
+            )?
             .body()
-            .deserialize()
-            .map_err(|e| BeError::ZfsError {
-                message: format!("Failed to deserialize response: {}", e),
-            })?;
+            .deserialize()?;
 
         Ok(())
     }
@@ -122,17 +107,13 @@ impl Client for RemoteClient {
     ) -> Result<(), BeError> {
         let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(target));
 
-        self.connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                object_path.as_str(),
-                Some("org.beadm.BootEnvironment"),
-                "destroy",
-                &(force_unmount, force_no_verify, snapshots),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?;
+        self.connection.call_method(
+            Some("org.beadm.Manager"),
+            object_path.as_str(),
+            Some("org.beadm.BootEnvironment"),
+            "destroy",
+            &(force_unmount, force_no_verify, snapshots),
+        )?;
 
         Ok(())
     }
@@ -145,17 +126,13 @@ impl Client for RemoteClient {
 
         let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
 
-        self.connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                object_path.as_str(),
-                Some("org.beadm.BootEnvironment"),
-                "mount",
-                &(mountpoint, read_only),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?;
+        self.connection.call_method(
+            Some("org.beadm.Manager"),
+            object_path.as_str(),
+            Some("org.beadm.BootEnvironment"),
+            "mount",
+            &(mountpoint, read_only),
+        )?;
 
         Ok(())
     }
@@ -171,15 +148,9 @@ impl Client for RemoteClient {
                 Some("org.beadm.BootEnvironment"),
                 "unmount",
                 &(force,),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?
+            )?
             .body()
-            .deserialize()
-            .map_err(|e| BeError::ZfsError {
-                message: format!("Failed to deserialize response: {}", e),
-            })?;
+            .deserialize()?;
 
         if result.is_empty() {
             Ok(None)
@@ -199,15 +170,9 @@ impl Client for RemoteClient {
                 Some("org.beadm.BootEnvironment"),
                 "get_hostid",
                 &(),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?
+            )?
             .body()
-            .deserialize()
-            .map_err(|e| BeError::ZfsError {
-                message: format!("Failed to deserialize response: {}", e),
-            })?;
+            .deserialize()?;
 
         if hostid == 0 {
             Ok(None)
@@ -219,17 +184,13 @@ impl Client for RemoteClient {
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
         let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
 
-        self.connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                object_path.as_str(),
-                Some("org.beadm.BootEnvironment"),
-                "rename",
-                &(new_name,),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?;
+        self.connection.call_method(
+            Some("org.beadm.Manager"),
+            object_path.as_str(),
+            Some("org.beadm.BootEnvironment"),
+            "rename",
+            &(new_name,),
+        )?;
 
         Ok(())
     }
@@ -237,17 +198,13 @@ impl Client for RemoteClient {
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), BeError> {
         let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
 
-        self.connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                object_path.as_str(),
-                Some("org.beadm.BootEnvironment"),
-                "activate",
-                &(temporary,),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?;
+        self.connection.call_method(
+            Some("org.beadm.Manager"),
+            object_path.as_str(),
+            Some("org.beadm.BootEnvironment"),
+            "activate",
+            &(temporary,),
+        )?;
 
         Ok(())
     }
@@ -255,17 +212,13 @@ impl Client for RemoteClient {
     fn deactivate(&self, be_name: &str) -> Result<(), BeError> {
         let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
 
-        self.connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                object_path.as_str(),
-                Some("org.beadm.BootEnvironment"),
-                "deactivate",
-                &(),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?;
+        self.connection.call_method(
+            Some("org.beadm.Manager"),
+            object_path.as_str(),
+            Some("org.beadm.BootEnvironment"),
+            "deactivate",
+            &(),
+        )?;
 
         Ok(())
     }
@@ -273,17 +226,13 @@ impl Client for RemoteClient {
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
         let object_path = format!("/org/beadm/BootEnvironments/{}", sanitize_be_name(be_name));
 
-        self.connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                object_path.as_str(),
-                Some("org.beadm.BootEnvironment"),
-                "rollback",
-                &(snapshot,),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?;
+        self.connection.call_method(
+            Some("org.beadm.Manager"),
+            object_path.as_str(),
+            Some("org.beadm.BootEnvironment"),
+            "rollback",
+            &(snapshot,),
+        )?;
 
         Ok(())
     }
@@ -291,26 +240,16 @@ impl Client for RemoteClient {
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, BeError> {
         use zbus::zvariant::OwnedValue;
 
-        let message = self
-            .connection
-            .call_method(
-                Some("org.beadm.Manager"),
-                "/org/beadm/Manager",
-                Some("org.freedesktop.DBus.ObjectManager"),
-                "GetManagedObjects",
-                &(),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("Failed to get managed objects: {}", e),
-            })?;
+        let message = self.connection.call_method(
+            Some("org.beadm.Manager"),
+            "/org/beadm/Manager",
+            Some("org.freedesktop.DBus.ObjectManager"),
+            "GetManagedObjects",
+            &(),
+        )?;
 
         let managed_objects: BTreeMap<String, BTreeMap<String, BTreeMap<String, OwnedValue>>> =
-            message
-                .body()
-                .deserialize()
-                .map_err(|e| BeError::ZfsError {
-                    message: format!("Failed to deserialize managed objects: {}", e),
-                })?;
+            message.body().deserialize()?;
 
         let mut boot_environments = Vec::new();
 
@@ -326,7 +265,7 @@ impl Client for RemoteClient {
                         }
                     })
                     .ok_or_else(|| BeError::ZfsError {
-                        message: "Missing or invalid Name property".to_string(),
+                        message: "Missing or invalid Name property in D-Bus response".to_string(),
                     })?;
 
                 let path = be_interface
@@ -339,7 +278,7 @@ impl Client for RemoteClient {
                         }
                     })
                     .ok_or_else(|| BeError::ZfsError {
-                        message: "Missing or invalid Path property".to_string(),
+                        message: "Missing or invalid Path property in D-Bus response".to_string(),
                     })?;
 
                 let description = be_interface.get("Description").and_then(|v| {
@@ -445,15 +384,9 @@ impl Client for RemoteClient {
                 Some("org.beadm.BootEnvironment"),
                 "get_snapshots",
                 &(),
-            )
-            .map_err(|e| BeError::ZfsError {
-                message: format!("D-Bus call failed: {}", e),
-            })?
+            )?
             .body()
-            .deserialize()
-            .map_err(|e| BeError::ZfsError {
-                message: format!("Failed to deserialize response: {}", e),
-            })?;
+            .deserialize()?;
 
         let snapshots = snapshots_data
             .into_iter()
@@ -484,6 +417,14 @@ impl BootEnvironmentObject {
     pub fn new(name: String, client: Arc<dyn Client + Send + Sync>) -> Self {
         Self { name, client }
     }
+
+    /// Helper method to get the BootEnvironment data for this object
+    fn get_boot_environment(&self) -> Result<BootEnvironment, BeError> {
+        let envs = self.client.get_boot_environments()?;
+        envs.into_iter()
+            .find(|be| be.name == self.name)
+            .ok_or_else(|| BeError::not_found(&self.name))
+    }
 }
 
 #[interface(name = "org.beadm.BootEnvironment")]
@@ -497,45 +438,21 @@ impl BootEnvironmentObject {
     /// Boot environment dataset path
     #[zbus(property)]
     fn path(&self) -> zbus::fdo::Result<String> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
-        Ok(env.path.clone())
+        let env = self.get_boot_environment()?;
+        Ok(env.path)
     }
 
     /// Boot environment description
     #[zbus(property)]
     fn description(&self) -> zbus::fdo::Result<String> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
-        Ok(env.description.clone().unwrap_or_default())
+        let env = self.get_boot_environment()?;
+        Ok(env.description.unwrap_or_default())
     }
 
     /// Current mountpoint (empty if not mounted)
     #[zbus(property)]
     fn mountpoint(&self) -> zbus::fdo::Result<String> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
+        let env = self.get_boot_environment()?;
         Ok(env
             .mountpoint
             .as_ref()
@@ -546,75 +463,35 @@ impl BootEnvironmentObject {
     /// Whether this is the currently active boot environment
     #[zbus(property)]
     fn active(&self) -> zbus::fdo::Result<bool> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
+        let env = self.get_boot_environment()?;
         Ok(env.active)
     }
 
     /// Whether this BE will be used for next boot
     #[zbus(property)]
     fn next_boot(&self) -> zbus::fdo::Result<bool> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
+        let env = self.get_boot_environment()?;
         Ok(env.next_boot)
     }
 
     /// Whether this BE is set for one-time boot
     #[zbus(property)]
     fn boot_once(&self) -> zbus::fdo::Result<bool> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
+        let env = self.get_boot_environment()?;
         Ok(env.boot_once)
     }
 
     /// Space used by this boot environment in bytes
     #[zbus(property)]
     fn space(&self) -> zbus::fdo::Result<u64> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
+        let env = self.get_boot_environment()?;
         Ok(env.space)
     }
 
     /// Creation timestamp (Unix time)
     #[zbus(property)]
     fn created(&self) -> zbus::fdo::Result<i64> {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
-
-        let env = envs
-            .iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| zbus::fdo::Error::Failed("Boot environment not found".to_string()))?;
-
+        let env = self.get_boot_environment()?;
         Ok(env.created)
     }
 
@@ -626,10 +503,8 @@ impl BootEnvironmentObject {
         snapshots: bool,
     ) -> zbus::fdo::Result<()> {
         self.client
-            .destroy(&self.name, force_unmount, force_no_verify, snapshots)
-            .map_err(|e| {
-                zbus::fdo::Error::Failed(format!("Failed to destroy boot environment: {}", e))
-            })
+            .destroy(&self.name, force_unmount, force_no_verify, snapshots)?;
+        Ok(())
     }
 
     /// Mount this boot environment
@@ -640,57 +515,43 @@ impl BootEnvironmentObject {
             MountMode::ReadWrite
         };
 
-        self.client
-            .mount(&self.name, mountpoint, mode)
-            .map_err(|e| {
-                zbus::fdo::Error::Failed(format!("Failed to mount boot environment: {}", e))
-            })
+        self.client.mount(&self.name, mountpoint, mode)?;
+        Ok(())
     }
 
     /// Unmount this boot environment
     fn unmount(&self, force: bool) -> zbus::fdo::Result<String> {
-        let result = self.client.unmount(&self.name, force).map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to unmount boot environment: {}", e))
-        })?;
-
+        let result = self.client.unmount(&self.name, force)?;
         Ok(result.map(|p| p.display().to_string()).unwrap_or_default())
     }
 
     /// Rename this boot environment
     fn rename(&self, new_name: &str) -> zbus::fdo::Result<()> {
-        self.client.rename(&self.name, new_name).map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to rename boot environment: {}", e))
-        })
+        self.client.rename(&self.name, new_name)?;
+        Ok(())
     }
 
     /// Activate this boot environment
     fn activate(&self, temporary: bool) -> zbus::fdo::Result<()> {
-        self.client.activate(&self.name, temporary).map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to activate boot environment: {}", e))
-        })
+        self.client.activate(&self.name, temporary)?;
+        Ok(())
     }
 
     /// Deactivate this boot environment
     fn deactivate(&self) -> zbus::fdo::Result<()> {
-        self.client.deactivate(&self.name).map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to deactivate boot environment: {}", e))
-        })
+        self.client.deactivate(&self.name)?;
+        Ok(())
     }
 
     /// Rollback to a snapshot
     fn rollback(&self, snapshot: &str) -> zbus::fdo::Result<()> {
-        self.client.rollback(&self.name, snapshot).map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to rollback boot environment: {}", e))
-        })
+        self.client.rollback(&self.name, snapshot)?;
+        Ok(())
     }
 
     /// Get snapshots for this boot environment
     fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, String, u64, i64)>> {
-        let snapshots = self
-            .client
-            .get_snapshots(&self.name)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to get snapshots: {}", e)))?;
-
+        let snapshots = self.client.get_snapshots(&self.name)?;
         Ok(snapshots
             .into_iter()
             .map(|snap| (snap.name, snap.path, snap.space, snap.created))
@@ -699,11 +560,7 @@ impl BootEnvironmentObject {
 
     /// Get host ID for this boot environment
     fn get_hostid(&self) -> zbus::fdo::Result<u32> {
-        let hostid = self
-            .client
-            .hostid(&self.name)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Failed to get hostid: {}", e)))?;
-
+        let hostid = self.client.hostid(&self.name)?;
         Ok(hostid.unwrap_or(0))
     }
 }
@@ -729,10 +586,7 @@ impl BeadmManager {
         object_server: &ObjectServer,
         object_manager: &BeadmObjectManager,
     ) -> ZbusResult<()> {
-        let envs = self
-            .client
-            .get_boot_environments()
-            .map_err(|e| zbus::Error::Failure(format!("Failed to get boot environments: {}", e)))?;
+        let envs = self.client.get_boot_environments()?;
 
         let mut objects = self.objects.lock().unwrap();
 
@@ -835,11 +689,7 @@ impl BeadmManager {
             Some(source)
         };
 
-        self.client
-            .create(name, desc, src, &properties)
-            .map_err(|e| {
-                zbus::fdo::Error::Failed(format!("Failed to create boot environment: {}", e))
-            })?;
+        self.client.create(name, desc, src, &properties)?;
 
         Ok(be_object_path(name))
     }
@@ -863,9 +713,7 @@ impl BeadmManager {
             Some(host_id)
         };
 
-        self.client.new(name, desc, hid, &properties).map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to create new boot environment: {}", e))
-        })?;
+        self.client.new(name, desc, hid, &properties)?;
 
         Ok(be_object_path(name))
     }
@@ -920,9 +768,7 @@ impl BeadmObjectManager {
     ) -> zbus::fdo::Result<
         BTreeMap<String, BTreeMap<String, BTreeMap<String, zbus::zvariant::Value>>>,
     > {
-        let envs = self.client.get_boot_environments().map_err(|e| {
-            zbus::fdo::Error::Failed(format!("Failed to get boot environments: {}", e))
-        })?;
+        let envs = self.client.get_boot_environments()?;
 
         let mut objects = BTreeMap::new();
 
