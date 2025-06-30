@@ -323,7 +323,7 @@ impl BootEnvironmentObject {
     }
 
     /// Whether this is the currently active boot environment
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "const"))]
     fn active(&self) -> zbus::fdo::Result<bool> {
         let env = self.get_boot_environment()?;
         Ok(env.active)
@@ -351,7 +351,7 @@ impl BootEnvironmentObject {
     }
 
     /// Creation timestamp (Unix time)
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "const"))]
     fn created(&self) -> zbus::fdo::Result<i64> {
         let env = self.get_boot_environment()?;
         Ok(env.created)
