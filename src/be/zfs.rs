@@ -308,6 +308,7 @@ impl Client for LibZfsClient {
             bes.push(BootEnvironment {
                 name: path.basename(),
                 path: path.to_string(),
+                guid: dataset.get_guid(),
                 description: None, // TODO: Read from user property
                 mountpoint: dataset.get_mountpoint(),
                 active,
@@ -448,6 +449,11 @@ impl Dataset {
     pub fn get_creation_time(&self) -> i64 {
         self.get_numeric_property(ffi::ZFS_PROP_CREATION)
             .unwrap_or(0) as i64
+    }
+
+    /// Get the GUID of this dataset.
+    pub fn get_guid(&self) -> u64 {
+        self.get_numeric_property(ffi::ZFS_PROP_GUID).unwrap_or(0)
     }
 
     // Rename this dataset.

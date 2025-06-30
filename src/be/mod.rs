@@ -126,6 +126,8 @@ pub struct BootEnvironment {
     /// The ZFS dataset path (e.g., `zroot/ROOT/default`).
     #[allow(dead_code)]
     pub path: String,
+    /// The ZFS dataset GUID.
+    pub guid: u64,
     /// A description for this boot environment, if any.
     pub description: Option<String>,
     /// If the boot environment is currently mounted, this is its mountpoint.

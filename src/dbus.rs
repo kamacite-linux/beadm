@@ -10,18 +10,10 @@ use zbus::object_server::SignalEmitter;
 use zbus::{Result as ZbusResult, interface};
 use zvariant::ObjectPath;
 
-/// Translate a boot environment name to a D-Bus object path.
-fn be_object_path(name: &str) -> ObjectPath<'static> {
-    // D-Bus object paths can only contain [A-Za-z0-9_/].
-    let sanitised: String = name
-        .chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '_' => c,
-            _ => '_',
-        })
-        .collect();
-    // This is safe to unwrap because we've already sanitised the name.
-    ObjectPath::try_from(format!("/org/beadm/BootEnvironments/{}", sanitised)).unwrap()
+/// Translate a boot environment GUID to a D-Bus object path.
+fn be_object_path(guid: u64) -> ObjectPath<'static> {
+    // This is safe to unwrap because hex strings are always valid object path components.
+    ObjectPath::try_from(format!("/org/beadm/BootEnvironments/{:016x}", guid)).unwrap()
 }
 
 // ============================================================================
@@ -41,6 +33,15 @@ impl RemoteClient {
         }?;
 
         Ok(Self { connection })
+    }
+
+    /// Get the GUID for a boot environment by name
+    fn get_be_guid(&self, be_name: &str) -> Result<u64, BeError> {
+        let bes = self.get_boot_environments()?;
+        bes.into_iter()
+            .find(|be| be.name == be_name)
+            .map(|be| be.guid)
+            .ok_or_else(|| BeError::not_found(be_name))
     }
 }
 
@@ -104,9 +105,10 @@ impl Client for RemoteClient {
         force_no_verify: bool,
         snapshots: bool,
     ) -> Result<(), BeError> {
+        let guid = self.get_be_guid(target)?;
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            &be_object_path(target),
+            &be_object_path(guid),
             Some("org.beadm.BootEnvironment"),
             "destroy",
             &(force_unmount, force_no_verify, snapshots),
@@ -119,9 +121,10 @@ impl Client for RemoteClient {
             MountMode::ReadOnly => true,
             MountMode::ReadWrite => false,
         };
+        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            &be_object_path(be_name),
+            &be_object_path(guid),
             Some("org.beadm.BootEnvironment"),
             "mount",
             &(mountpoint, read_only),
@@ -130,11 +133,12 @@ impl Client for RemoteClient {
     }
 
     fn unmount(&self, target: &str, force: bool) -> Result<Option<PathBuf>, BeError> {
+        let guid = self.get_be_guid(target)?;
         let result: String = self
             .connection
             .call_method(
                 Some("org.beadm.Manager"),
-                &be_object_path(target),
+                &be_object_path(guid),
                 Some("org.beadm.BootEnvironment"),
                 "unmount",
                 &(force,),
@@ -150,11 +154,12 @@ impl Client for RemoteClient {
     }
 
     fn hostid(&self, be_name: &str) -> Result<Option<u32>, BeError> {
+        let guid = self.get_be_guid(be_name)?;
         let hostid: u32 = self
             .connection
             .call_method(
                 Some("org.beadm.Manager"),
-                &be_object_path(be_name),
+                &be_object_path(guid),
                 Some("org.beadm.BootEnvironment"),
                 "get_hostid",
                 &(),
@@ -170,9 +175,10 @@ impl Client for RemoteClient {
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
+        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            &be_object_path(be_name),
+            &be_object_path(guid),
             Some("org.beadm.BootEnvironment"),
             "rename",
             &(new_name,),
@@ -181,9 +187,10 @@ impl Client for RemoteClient {
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), BeError> {
+        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            &be_object_path(be_name),
+            &be_object_path(guid),
             Some("org.beadm.BootEnvironment"),
             "activate",
             &(temporary,),
@@ -192,9 +199,10 @@ impl Client for RemoteClient {
     }
 
     fn deactivate(&self, be_name: &str) -> Result<(), BeError> {
+        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            &be_object_path(be_name),
+            &be_object_path(guid),
             Some("org.beadm.BootEnvironment"),
             "deactivate",
             &(),
@@ -203,9 +211,10 @@ impl Client for RemoteClient {
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
+        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some("org.beadm.Manager"),
-            &be_object_path(be_name),
+            &be_object_path(guid),
             Some("org.beadm.BootEnvironment"),
             "rollback",
             &(snapshot,),
@@ -238,11 +247,12 @@ impl Client for RemoteClient {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, BeError> {
+        let guid = self.get_be_guid(be_name)?;
         let snapshots_data: Vec<(String, String, u64, i64)> = self
             .connection
             .call_method(
                 Some("org.beadm.Manager"),
-                &be_object_path(be_name),
+                &be_object_path(guid),
                 Some("org.beadm.BootEnvironment"),
                 "get_snapshots",
                 &(),
@@ -272,12 +282,13 @@ impl Client for RemoteClient {
 #[derive(Clone)]
 pub struct BootEnvironmentObject {
     name: String,
+    guid: u64,
     client: Arc<dyn Client + Send + Sync>,
 }
 
 impl BootEnvironmentObject {
-    pub fn new(name: String, client: Arc<dyn Client + Send + Sync>) -> Self {
-        Self { name, client }
+    pub fn new(name: String, guid: u64, client: Arc<dyn Client + Send + Sync>) -> Self {
+        Self { name, guid, client }
     }
 
     /// Helper method to get the BootEnvironment data for this object
@@ -455,7 +466,7 @@ impl BeadmManager {
         // Remove objects that no longer exist
         let mut to_remove = Vec::new();
         for (path, obj) in objects.iter() {
-            if !envs.iter().any(|be| be.name == obj.name) {
+            if !envs.iter().any(|be| be.guid == obj.guid) {
                 to_remove.push(path.clone());
             }
         }
@@ -471,9 +482,13 @@ impl BeadmManager {
 
         // Add new objects
         for env in &envs {
-            let path = be_object_path(&env.name);
+            let path = be_object_path(env.guid);
             if !objects.contains_key(path.as_str()) {
-                let obj = BootEnvironmentObject::new(env.name.clone(), Arc::clone(&self.client));
+                let obj = BootEnvironmentObject::new(
+                    env.name.clone(),
+                    env.guid,
+                    Arc::clone(&self.client),
+                );
                 object_server.at(&path, obj.clone())?;
                 objects.insert(path.as_str().to_string(), Arc::new(obj));
 
@@ -511,7 +526,15 @@ impl BeadmManager {
 
         self.client.create(name, desc, src, &properties)?;
 
-        Ok(be_object_path(name))
+        // Get the newly created BE to find its GUID
+        let bes = self.client.get_boot_environments()?;
+        let guid = bes
+            .into_iter()
+            .find(|be| be.name == name)
+            .map(|be| be.guid)
+            .ok_or_else(|| BeError::not_found(name))?;
+
+        Ok(be_object_path(guid))
     }
 
     /// Create a new empty boot environment
@@ -535,7 +558,15 @@ impl BeadmManager {
 
         self.client.new(name, desc, hid, &properties)?;
 
-        Ok(be_object_path(name))
+        // Get the newly created BE to find its GUID
+        let bes = self.client.get_boot_environments()?;
+        let guid = bes
+            .into_iter()
+            .find(|be| be.name == name)
+            .map(|be| be.guid)
+            .ok_or_else(|| BeError::not_found(name))?;
+
+        Ok(be_object_path(guid))
     }
 }
 
@@ -589,7 +620,7 @@ impl BeadmObjectManager {
         let mut objects = BTreeMap::new();
         for env in self.client.get_boot_environments()? {
             // We only manage objects with one interface.
-            let path = be_object_path(&env.name);
+            let path = be_object_path(env.guid);
             let mut interfaces = BTreeMap::new();
             interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
             objects.insert(path, interfaces);
@@ -661,12 +692,12 @@ mod tests {
     #[test]
     fn test_be_object_path() {
         assert_eq!(
-            be_object_path("default").as_str(),
-            "/org/beadm/BootEnvironments/default"
+            be_object_path(0x1234567890abcdef).as_str(),
+            "/org/beadm/BootEnvironments/1234567890abcdef"
         );
         assert_eq!(
-            be_object_path("test-be").as_str(),
-            "/org/beadm/BootEnvironments/test_be"
+            be_object_path(0x0).as_str(),
+            "/org/beadm/BootEnvironments/0000000000000000"
         );
     }
 }

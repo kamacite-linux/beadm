@@ -1,5 +1,7 @@
 use chrono::Utc;
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use super::validation::validate_be_name;
@@ -18,6 +20,13 @@ impl EmulatorClient {
             root: "zfake/ROOT".to_string(),
             bes: RefCell::new(bes),
         }
+    }
+
+    /// Generate a fake GUID based on the boot environment name
+    pub fn generate_guid(be_name: &str) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        be_name.hash(&mut hasher);
+        hasher.finish()
     }
 
     pub fn empty() -> Self {
@@ -63,6 +72,7 @@ impl Client for EmulatorClient {
         bes.push(BootEnvironment {
             name: be_name.to_string(),
             path: format!("{}/{}", self.root, be_name),
+            guid: Self::generate_guid(be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
             active: false,
@@ -94,6 +104,7 @@ impl Client for EmulatorClient {
         bes.push(BootEnvironment {
             name: be_name.to_string(),
             path: format!("{}/{}", self.root, be_name),
+            guid: Self::generate_guid(be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
             active: false,
@@ -353,6 +364,7 @@ fn sample_boot_environments() -> Vec<BootEnvironment> {
         BootEnvironment {
             name: "default".to_string(),
             path: "zfake/ROOT/default".to_string(),
+            guid: EmulatorClient::generate_guid("default"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/")),
             active: true,
@@ -364,6 +376,7 @@ fn sample_boot_environments() -> Vec<BootEnvironment> {
         BootEnvironment {
             name: "alt".to_string(),
             path: "zfake/ROOT/alt".to_string(),
+            guid: EmulatorClient::generate_guid("alt"),
             description: Some("Testing".to_string()),
             mountpoint: None,
             active: false,
@@ -468,6 +481,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "destroyable".to_string(),
             path: "zfake/ROOT/destroyable".to_string(),
+            guid: EmulatorClient::generate_guid("destroyable"),
             description: Some("Test BE for destruction".to_string()),
             mountpoint: None,
             active: false,
@@ -506,6 +520,7 @@ mod tests {
         let active_be = BootEnvironment {
             name: "active-be".to_string(),
             path: "zfake/ROOT/active-be".to_string(),
+            guid: EmulatorClient::generate_guid("active-be"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/")),
             active: true,
@@ -533,6 +548,7 @@ mod tests {
         let mounted_be = BootEnvironment {
             name: "mounted-be".to_string(),
             path: "zfake/ROOT/mounted-be".to_string(),
+            guid: EmulatorClient::generate_guid("mounted-be"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -599,6 +615,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
             path: "zfake/ROOT/test-be".to_string(),
+            guid: EmulatorClient::generate_guid("test-be"),
             description: None,
             mountpoint: None,
             active: false,
@@ -634,6 +651,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
             path: "zfake/ROOT/test-be".to_string(),
+            guid: EmulatorClient::generate_guid("test-be"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/existing")),
             active: false,
@@ -653,6 +671,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -665,6 +684,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -684,6 +704,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
             path: "zfake/ROOT/test-be".to_string(),
+            guid: EmulatorClient::generate_guid("test-be"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -709,6 +730,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
             path: "zfake/ROOT/test-be".to_string(),
+            guid: EmulatorClient::generate_guid("test-be"),
             description: None,
             mountpoint: Some(std::path::PathBuf::from("/mnt/test")),
             active: false,
@@ -734,6 +756,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
             path: "zfake/ROOT/test-be".to_string(),
+            guid: EmulatorClient::generate_guid("test-be"),
             description: None,
             mountpoint: None,
             active: false,
@@ -755,6 +778,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "test-be".to_string(),
             path: "zfake/ROOT/test-be".to_string(),
+            guid: EmulatorClient::generate_guid("test-be"),
             description: None,
             mountpoint: Some(PathBuf::from("/mnt/test")), // Make it mounted
             active: false,
@@ -782,6 +806,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "no-hostid-be".to_string(),
             path: "zfake/ROOT/no-hostid-be".to_string(),
+            guid: EmulatorClient::generate_guid("no-hostid-be"),
             description: None,
             mountpoint: Some(PathBuf::from("/mnt/test")), // Make it mounted
             active: false,
@@ -804,6 +829,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "unmounted-be".to_string(),
             path: "zfake/ROOT/unmounted-be".to_string(),
+            guid: EmulatorClient::generate_guid("unmounted-be"),
             description: None,
             mountpoint: None, // Not mounted
             active: false,
@@ -828,6 +854,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "old-name".to_string(),
             path: "zfake/ROOT/old-name".to_string(),
+            guid: EmulatorClient::generate_guid("old-name"),
             description: Some("Test BE".to_string()),
             mountpoint: None,
             active: false,
@@ -861,6 +888,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: None,
             active: false,
@@ -873,6 +901,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -893,6 +922,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: None,
             active: true,
@@ -905,6 +935,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -931,6 +962,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: None,
             active: true,
@@ -943,6 +975,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -969,6 +1002,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: None,
             active: true,
@@ -981,6 +1015,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -1027,6 +1062,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: None,
             active: false,
@@ -1039,6 +1075,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -1074,6 +1111,7 @@ mod tests {
         let be1 = BootEnvironment {
             name: "be1".to_string(),
             path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
             description: None,
             mountpoint: None,
             active: true,
@@ -1086,6 +1124,7 @@ mod tests {
         let be2 = BootEnvironment {
             name: "be2".to_string(),
             path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
             description: None,
             mountpoint: None,
             active: false,
@@ -1228,6 +1267,7 @@ mod tests {
         let test_be = BootEnvironment {
             name: "no-snapshots".to_string(),
             path: "zfake/ROOT/no-snapshots".to_string(),
+            guid: EmulatorClient::generate_guid("no-snapshots"),
             description: None,
             mountpoint: None,
             active: false,
