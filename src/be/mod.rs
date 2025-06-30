@@ -1,6 +1,7 @@
 use clap::ValueEnum;
 use std::path::{Path, PathBuf};
 use thiserror::Error as ThisError;
+use zvariant::{DeserializeDict, SerializeDict, Type};
 
 pub mod mock;
 pub mod threadsafe;
@@ -117,7 +118,8 @@ pub enum MountMode {
     ReadOnly,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, SerializeDict, DeserializeDict, Type)]
+#[zvariant(signature = "a{sv}", rename_all = "PascalCase")]
 pub struct BootEnvironment {
     /// The name of this boot environment.
     pub name: String,

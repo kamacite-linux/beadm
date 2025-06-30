@@ -219,6 +219,7 @@ dependencies = [
  "chrono",
  "clap",
  "libc",
+ "serde",
  "tempfile",
  "thiserror",
  "zbus",

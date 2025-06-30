@@ -214,138 +214,26 @@ impl Client for RemoteClient {
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, BeError> {
-        use zbus::zvariant::OwnedValue;
+        let body = self
+            .connection
+            .call_method(
+                Some("org.beadm.Manager"),
+                "/org/beadm/Manager",
+                Some("org.freedesktop.DBus.ObjectManager"),
+                "GetManagedObjects",
+                &(),
+            )?
+            .body();
 
-        let message = self.connection.call_method(
-            Some("org.beadm.Manager"),
-            "/org/beadm/Manager",
-            Some("org.freedesktop.DBus.ObjectManager"),
-            "GetManagedObjects",
-            &(),
-        )?;
-
-        let managed_objects: BTreeMap<String, BTreeMap<String, BTreeMap<String, OwnedValue>>> =
-            message.body().deserialize()?;
+        let managed_objects: BTreeMap<ObjectPath, BTreeMap<String, BootEnvironment>> =
+            body.deserialize()?;
 
         let mut boot_environments = Vec::new();
-
-        for (_object_path, interfaces) in managed_objects {
-            if let Some(be_interface) = interfaces.get("org.beadm.BootEnvironment") {
-                let name = be_interface
-                    .get("Name")
-                    .and_then(|v| {
-                        if let Ok(s) = String::try_from(v.clone()) {
-                            Some(s)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| BeError::ZfsError {
-                        message: "Missing or invalid Name property in D-Bus response".to_string(),
-                    })?;
-
-                let path = be_interface
-                    .get("Path")
-                    .and_then(|v| {
-                        if let Ok(s) = String::try_from(v.clone()) {
-                            Some(s)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| BeError::ZfsError {
-                        message: "Missing or invalid Path property in D-Bus response".to_string(),
-                    })?;
-
-                let description = be_interface.get("Description").and_then(|v| {
-                    if let Ok(s) = String::try_from(v.clone()) {
-                        if s.is_empty() { None } else { Some(s) }
-                    } else {
-                        None
-                    }
-                });
-
-                let mountpoint = be_interface.get("Mountpoint").and_then(|v| {
-                    if let Ok(s) = String::try_from(v.clone()) {
-                        if s.is_empty() {
-                            None
-                        } else {
-                            Some(PathBuf::from(s))
-                        }
-                    } else {
-                        None
-                    }
-                });
-
-                let active = be_interface
-                    .get("Active")
-                    .and_then(|v| {
-                        if let Ok(b) = bool::try_from(v.clone()) {
-                            Some(b)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(false);
-
-                let next_boot = be_interface
-                    .get("NextBoot")
-                    .and_then(|v| {
-                        if let Ok(b) = bool::try_from(v.clone()) {
-                            Some(b)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(false);
-
-                let boot_once = be_interface
-                    .get("BootOnce")
-                    .and_then(|v| {
-                        if let Ok(b) = bool::try_from(v.clone()) {
-                            Some(b)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(false);
-
-                let space = be_interface
-                    .get("Space")
-                    .and_then(|v| {
-                        if let Ok(n) = u64::try_from(v.clone()) {
-                            Some(n)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-
-                let created = be_interface
-                    .get("Created")
-                    .and_then(|v| {
-                        if let Ok(n) = i64::try_from(v.clone()) {
-                            Some(n)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-
-                boot_environments.push(BootEnvironment {
-                    name,
-                    path,
-                    description,
-                    mountpoint,
-                    active,
-                    next_boot,
-                    boot_once,
-                    space,
-                    created,
-                });
+        for (_path, interfaces) in managed_objects {
+            if let Some(be) = interfaces.get("org.beadm.BootEnvironment") {
+                boot_environments.push(be.clone());
             }
         }
-
         Ok(boot_environments)
     }
 
@@ -584,57 +472,15 @@ impl BeadmManager {
         // Add new objects
         for env in &envs {
             let path = be_object_path(&env.name);
-            if !objects.contains_key(&path) {
+            if !objects.contains_key(path.as_str()) {
                 let obj = BootEnvironmentObject::new(env.name.clone(), Arc::clone(&self.client));
-                object_server.at(path.as_str(), obj.clone())?;
-                objects.insert(path.clone(), Arc::new(obj));
+                object_server.at(&path, obj.clone())?;
+                objects.insert(path.as_str().to_string(), Arc::new(obj));
 
-                // Create properties for the signal
-                let mut properties = BTreeMap::new();
-                properties.insert(
-                    "Name".to_string(),
-                    zbus::zvariant::Value::from(env.name.clone()),
-                );
-                properties.insert(
-                    "Path".to_string(),
-                    zbus::zvariant::Value::from(env.path.clone()),
-                );
-                properties.insert(
-                    "Description".to_string(),
-                    zbus::zvariant::Value::from(env.description.clone().unwrap_or_default()),
-                );
-                properties.insert(
-                    "Mountpoint".to_string(),
-                    zbus::zvariant::Value::from(
-                        env.mountpoint
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                    ),
-                );
-                properties.insert(
-                    "Active".to_string(),
-                    zbus::zvariant::Value::from(env.active),
-                );
-                properties.insert(
-                    "NextBoot".to_string(),
-                    zbus::zvariant::Value::from(env.next_boot),
-                );
-                properties.insert(
-                    "BootOnce".to_string(),
-                    zbus::zvariant::Value::from(env.boot_once),
-                );
-                properties.insert("Space".to_string(), zbus::zvariant::Value::from(env.space));
-                properties.insert(
-                    "Created".to_string(),
-                    zbus::zvariant::Value::from(env.created),
-                );
-
+                // Emit an InterfacesAdded signal.
                 let mut interfaces = BTreeMap::new();
-                interfaces.insert("org.beadm.BootEnvironment".to_string(), properties);
-
-                // Emit InterfacesAdded signal
-                object_manager.emit_interfaces_added(&path, interfaces);
+                interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
+                object_manager.emit_interfaces_added(path.as_str(), interfaces);
             }
         }
 
@@ -712,7 +558,7 @@ impl BeadmObjectManager {
     pub fn emit_interfaces_added(
         &self,
         object_path: &str,
-        _interfaces_and_properties: BTreeMap<String, BTreeMap<String, zbus::zvariant::Value>>,
+        _interfaces_and_properties: BTreeMap<String, &BootEnvironment>,
     ) {
         if let Some(_ctx) = self.signal_context.lock().unwrap().as_ref() {
             // For now, we'll skip the async signal emission in blocking context
@@ -739,55 +585,15 @@ impl BeadmObjectManager {
     /// Get all managed objects and their interfaces
     fn get_managed_objects(
         &self,
-    ) -> zbus::fdo::Result<
-        BTreeMap<String, BTreeMap<String, BTreeMap<String, zbus::zvariant::Value>>>,
-    > {
-        let envs = self.client.get_boot_environments()?;
-
+    ) -> zbus::fdo::Result<BTreeMap<ObjectPath<'static>, BTreeMap<String, BootEnvironment>>> {
         let mut objects = BTreeMap::new();
-
-        for env in envs {
+        for env in self.client.get_boot_environments()? {
+            // We only manage objects with one interface.
             let path = be_object_path(&env.name);
             let mut interfaces = BTreeMap::new();
-
-            // Add org.beadm.BootEnvironment interface with properties
-            let mut properties = BTreeMap::new();
-            properties.insert("Name".to_string(), zbus::zvariant::Value::from(env.name));
-            properties.insert("Path".to_string(), zbus::zvariant::Value::from(env.path));
-            properties.insert(
-                "Description".to_string(),
-                zbus::zvariant::Value::from(env.description.unwrap_or_default()),
-            );
-            properties.insert(
-                "Mountpoint".to_string(),
-                zbus::zvariant::Value::from(
-                    env.mountpoint
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                ),
-            );
-            properties.insert(
-                "Active".to_string(),
-                zbus::zvariant::Value::from(env.active),
-            );
-            properties.insert(
-                "NextBoot".to_string(),
-                zbus::zvariant::Value::from(env.next_boot),
-            );
-            properties.insert(
-                "BootOnce".to_string(),
-                zbus::zvariant::Value::from(env.boot_once),
-            );
-            properties.insert("Space".to_string(), zbus::zvariant::Value::from(env.space));
-            properties.insert(
-                "Created".to_string(),
-                zbus::zvariant::Value::from(env.created),
-            );
-
-            interfaces.insert("org.beadm.BootEnvironment".to_string(), properties);
+            interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
             objects.insert(path, interfaces);
         }
-
         Ok(objects)
     }
 
@@ -797,7 +603,7 @@ impl BeadmObjectManager {
         &self,
         _signal_ctxt: &SignalEmitter<'_>,
         object_path: &str,
-        interfaces_and_properties: BTreeMap<String, BTreeMap<String, zbus::zvariant::Value<'_>>>,
+        interfaces_and_properties: BTreeMap<String, BootEnvironment>,
     ) -> zbus::Result<()>;
 
     /// Signal emitted when interfaces are removed from an object
