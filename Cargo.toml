@@ -12,5 +12,6 @@ tempfile = "3.0"
 zbus = { version = "5.0", features = ["blocking-api"] }
 zvariant = "5.0"
 serde = "1.0"
+async-io = "2.0"
 
 [dev-dependencies]

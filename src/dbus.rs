@@ -1,5 +1,6 @@
 use crate::be::Error as BeError;
 use crate::be::{BootEnvironment, Client, MountMode, Snapshot};
+use async_io::block_on;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -442,7 +443,7 @@ impl BootEnvironmentObject {
 #[derive(Clone)]
 pub struct BeadmManager {
     client: Arc<dyn Client + Send + Sync>,
-    objects: Arc<Mutex<HashMap<String, Arc<BootEnvironmentObject>>>>,
+    objects: Arc<Mutex<HashMap<ObjectPath<'static>, Arc<BootEnvironmentObject>>>>,
 }
 
 impl BeadmManager {
@@ -454,13 +455,10 @@ impl BeadmManager {
     }
 
     /// Refresh the managed objects to match current boot environments
-    fn refresh_objects(
-        &self,
-        object_server: &ObjectServer,
-        object_manager: &BeadmObjectManager,
-    ) -> ZbusResult<()> {
+    pub fn refresh_objects(&self, object_server: &ObjectServer) -> ZbusResult<()> {
         let envs = self.client.get_boot_environments()?;
-
+        let object_manager =
+            object_server.interface::<_, BeadmObjectManager>("/org/beadm/Manager")?;
         let mut objects = self.objects.lock().unwrap();
 
         // Remove objects that no longer exist
@@ -475,27 +473,36 @@ impl BeadmManager {
             objects.remove(&path);
             let _ = object_server.remove::<BootEnvironmentObject, _>(path.as_str());
 
-            // Emit InterfacesRemoved signal
-            object_manager
-                .emit_interfaces_removed(&path, vec!["org.beadm.BootEnvironment".to_string()]);
+            // Emit an InterfacesRemoved signal.
+            block_on(BeadmObjectManager::interfaces_removed(
+                object_manager.signal_emitter(),
+                path,
+                vec!["org.beadm.BootEnvironment".to_string()],
+            ))?;
         }
 
         // Add new objects
         for env in &envs {
             let path = be_object_path(env.guid);
-            if !objects.contains_key(path.as_str()) {
+            if !objects.contains_key(&path) {
                 let obj = BootEnvironmentObject::new(
                     env.name.clone(),
                     env.guid,
                     Arc::clone(&self.client),
                 );
                 object_server.at(&path, obj.clone())?;
-                objects.insert(path.as_str().to_string(), Arc::new(obj));
+                objects.insert(path.clone(), Arc::new(obj));
 
                 // Emit an InterfacesAdded signal.
+                let iface_ref =
+                    object_server.interface::<_, BeadmObjectManager>("/org/beadm/Manager")?;
                 let mut interfaces = BTreeMap::new();
                 interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
-                object_manager.emit_interfaces_added(path.as_str(), interfaces);
+                block_on(BeadmObjectManager::interfaces_added(
+                    iface_ref.signal_emitter(),
+                    path,
+                    interfaces,
+                ))?;
             }
         }
 
@@ -574,40 +581,11 @@ impl BeadmManager {
 #[derive(Clone)]
 pub struct BeadmObjectManager {
     client: Arc<dyn Client + Send + Sync>,
-    signal_context: Arc<Mutex<Option<SignalEmitter<'static>>>>,
 }
 
 impl BeadmObjectManager {
     pub fn new(client: Arc<dyn Client + Send + Sync>) -> Self {
-        Self {
-            client,
-            signal_context: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    /// Helper method to emit InterfacesAdded signal
-    pub fn emit_interfaces_added(
-        &self,
-        object_path: &str,
-        _interfaces_and_properties: BTreeMap<String, &BootEnvironment>,
-    ) {
-        if let Some(_ctx) = self.signal_context.lock().unwrap().as_ref() {
-            // For now, we'll skip the async signal emission in blocking context
-            // This would require a runtime or different architecture
-            println!("Signal: InterfacesAdded for {}", object_path);
-        }
-    }
-
-    /// Helper method to emit InterfacesRemoved signal
-    pub fn emit_interfaces_removed(&self, object_path: &str, interfaces: Vec<String>) {
-        if let Some(_ctx) = self.signal_context.lock().unwrap().as_ref() {
-            // For now, we'll skip the async signal emission in blocking context
-            // This would require a runtime or different architecture
-            println!(
-                "Signal: InterfacesRemoved for {} (interfaces: {:?})",
-                object_path, interfaces
-            );
-        }
+        Self { client }
     }
 }
 
@@ -672,12 +650,12 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     );
 
     // Initial population of objects
-    manager.refresh_objects(&connection.object_server(), &object_manager)?;
+    manager.refresh_objects(&connection.object_server())?;
 
     // Keep the connection alive and periodically refresh objects
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Err(e) = manager.refresh_objects(&connection.object_server(), &object_manager) {
+        if let Err(e) = manager.refresh_objects(&connection.object_server()) {
             eprintln!("Error refreshing objects: {}", e);
         }
     }
