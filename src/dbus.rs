@@ -631,18 +631,16 @@ impl BeadmObjectManager {
     /// Signal emitted when new interfaces are added to an object
     #[zbus(signal)]
     async fn interfaces_added(
-        &self,
-        _signal_ctxt: &SignalEmitter<'_>,
-        object_path: &str,
-        interfaces_and_properties: BTreeMap<String, BootEnvironment>,
+        emitter: &SignalEmitter<'_>,
+        object_path: ObjectPath<'_>,
+        interfaces_and_properties: BTreeMap<String, &BootEnvironment>,
     ) -> zbus::Result<()>;
 
     /// Signal emitted when interfaces are removed from an object
     #[zbus(signal)]
     async fn interfaces_removed(
-        &self,
-        _signal_ctxt: &SignalEmitter<'_>,
-        object_path: &str,
+        emitter: &SignalEmitter<'_>,
+        object_path: ObjectPath<'_>,
         interfaces: Vec<String>,
     ) -> zbus::Result<()>;
 }
