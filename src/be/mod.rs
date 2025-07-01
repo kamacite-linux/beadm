@@ -4,7 +4,6 @@ use thiserror::Error as ThisError;
 use zvariant::{DeserializeDict, SerializeDict, Type};
 
 pub mod mock;
-pub mod threadsafe;
 pub mod validation;
 pub mod zfs;
 
@@ -157,7 +156,7 @@ pub struct Snapshot {
     pub created: i64,
 }
 
-pub trait Client {
+pub trait Client: Send + Sync {
     fn create(
         &self,
         be_name: &str,

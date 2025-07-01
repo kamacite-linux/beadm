@@ -284,11 +284,11 @@ impl Client for RemoteClient {
 pub struct BootEnvironmentObject {
     name: String,
     guid: u64,
-    client: Arc<dyn Client + Send + Sync>,
+    client: Arc<dyn Client>,
 }
 
 impl BootEnvironmentObject {
-    pub fn new(name: String, guid: u64, client: Arc<dyn Client + Send + Sync>) -> Self {
+    pub fn new(name: String, guid: u64, client: Arc<dyn Client>) -> Self {
         Self { name, guid, client }
     }
 
@@ -442,12 +442,12 @@ impl BootEnvironmentObject {
 /// Main beadm manager implementing ObjectManager
 #[derive(Clone)]
 pub struct BeadmManager {
-    client: Arc<dyn Client + Send + Sync>,
+    client: Arc<dyn Client>,
     objects: Arc<Mutex<HashMap<ObjectPath<'static>, Arc<BootEnvironmentObject>>>>,
 }
 
 impl BeadmManager {
-    pub fn new(client: Arc<dyn Client + Send + Sync>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self {
             client,
             objects: Arc::new(Mutex::new(HashMap::new())),
@@ -580,11 +580,11 @@ impl BeadmManager {
 /// ObjectManager interface implementation
 #[derive(Clone)]
 pub struct BeadmObjectManager {
-    client: Arc<dyn Client + Send + Sync>,
+    client: Arc<dyn Client>,
 }
 
 impl BeadmObjectManager {
-    pub fn new(client: Arc<dyn Client + Send + Sync>) -> Self {
+    pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
@@ -625,11 +625,9 @@ impl BeadmObjectManager {
 
 /// Start a D-Bus service for boot environment administration.
 pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResult<()> {
-    let thread_safe_client: Arc<dyn Client + Send + Sync> =
-        Arc::new(crate::be::threadsafe::ThreadSafeClient::new(client));
-
-    let manager = Arc::new(BeadmManager::new(Arc::clone(&thread_safe_client)));
-    let object_manager = Arc::new(BeadmObjectManager::new(thread_safe_client));
+    let client: Arc<dyn Client> = Arc::new(client);
+    let manager = Arc::new(BeadmManager::new(Arc::clone(&client)));
+    let object_manager = Arc::new(BeadmObjectManager::new(client));
 
     let builder = if use_session_bus {
         connection::Builder::session()?

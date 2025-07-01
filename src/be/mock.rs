@@ -1,8 +1,8 @@
 use chrono::Utc;
-use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 use super::validation::validate_be_name;
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
@@ -11,14 +11,14 @@ use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 /// entirely in-memory with no side effects.
 pub struct EmulatorClient {
     root: String,
-    bes: RefCell<Vec<BootEnvironment>>,
+    bes: RwLock<Vec<BootEnvironment>>,
 }
 
 impl EmulatorClient {
     pub fn new(bes: Vec<BootEnvironment>) -> Self {
         Self {
             root: "zfake/ROOT".to_string(),
-            bes: RefCell::new(bes),
+            bes: RwLock::new(bes),
         }
     }
 
@@ -32,7 +32,7 @@ impl EmulatorClient {
     pub fn empty() -> Self {
         Self {
             root: "zfake/ROOT".to_string(),
-            bes: RefCell::new(vec![]),
+            bes: RwLock::new(vec![]),
         }
     }
 
@@ -51,7 +51,7 @@ impl Client for EmulatorClient {
     ) -> Result<(), Error> {
         validate_be_name(be_name, &self.root)?;
 
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
 
         if bes.iter().any(|be| be.name == be_name) {
             return Err(Error::Conflict {
@@ -91,7 +91,7 @@ impl Client for EmulatorClient {
         _host_id: Option<&str>,
         _properties: &[String],
     ) -> Result<(), Error> {
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
 
         // Check for conflicts.
         if bes.iter().any(|be| be.name == be_name) {
@@ -125,7 +125,7 @@ impl Client for EmulatorClient {
     ) -> Result<(), Error> {
         // First, check if the BE exists and validate constraints
         {
-            let bes = self.bes.borrow();
+            let bes = self.bes.read().unwrap();
             let be = match bes.iter().find(|be| be.name == target) {
                 Some(be) => be,
                 None => {
@@ -154,7 +154,7 @@ impl Client for EmulatorClient {
         }
 
         // Now we can safely borrow mutably to remove the BE
-        self.bes.borrow_mut().retain(|x| x.name != target);
+        self.bes.write().unwrap().retain(|x| x.name != target);
 
         Ok(())
     }
@@ -162,7 +162,7 @@ impl Client for EmulatorClient {
     fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
         // First, validate preconditions with immutable borrow
         {
-            let bes = self.bes.borrow();
+            let bes = self.bes.read().unwrap();
 
             // Find the boot environment
             let be = match bes.iter().find(|be| be.name == be_name) {
@@ -196,7 +196,7 @@ impl Client for EmulatorClient {
         } // Release immutable borrow
 
         // Now perform the mount with mutable borrow
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
         if let Some(be) = bes.iter_mut().find(|be| be.name == be_name) {
             be.mountpoint = Some(std::path::PathBuf::from(mountpoint));
         }
@@ -205,7 +205,7 @@ impl Client for EmulatorClient {
     }
 
     fn unmount(&self, target: &str, _force: bool) -> Result<Option<PathBuf>, Error> {
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
 
         // Target can be either a BE name or a mountpoint path
         let be = match bes.iter_mut().find(|be| {
@@ -230,7 +230,7 @@ impl Client for EmulatorClient {
     }
 
     fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
-        let bes = self.bes.borrow();
+        let bes = self.bes.read().unwrap();
 
         // Find the boot environment
         let be = match bes.iter().find(|be| be.name == be_name) {
@@ -261,7 +261,7 @@ impl Client for EmulatorClient {
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
         validate_be_name(new_name, &self.root)?;
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
 
         // Check if source BE exists
         let be_index = match bes.iter().position(|be| be.name == be_name) {
@@ -288,7 +288,7 @@ impl Client for EmulatorClient {
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
 
         // Find the target boot environment
         let target_index = match bes.iter().position(|be| be.name == be_name) {
@@ -323,7 +323,7 @@ impl Client for EmulatorClient {
     }
 
     fn deactivate(&self, be_name: &str) -> Result<(), Error> {
-        let mut bes = self.bes.borrow_mut();
+        let mut bes = self.bes.write().unwrap();
         let target_index = match bes.iter().position(|be| be.name == be_name) {
             Some(index) => index,
             None => {
@@ -337,7 +337,7 @@ impl Client for EmulatorClient {
     }
 
     fn rollback(&self, be_name: &str, _snapshot: &str) -> Result<(), Error> {
-        if !self.bes.borrow().iter().any(|be| be.name == be_name) {
+        if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
             });
@@ -346,11 +346,11 @@ impl Client for EmulatorClient {
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
-        Ok(self.bes.borrow().clone())
+        Ok(self.bes.read().unwrap().clone())
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
-        if !self.bes.borrow().iter().any(|be| be.name == be_name) {
+        if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
             });
