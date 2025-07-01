@@ -4,7 +4,7 @@ use async_io::block_on;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use zbus::blocking::ObjectServer;
 use zbus::blocking::{Connection, connection};
 use zbus::object_server::SignalEmitter;
@@ -282,22 +282,71 @@ impl Client for RemoteClient {
 /// Individual boot environment D-Bus object
 #[derive(Clone)]
 pub struct BootEnvironmentObject {
-    name: String,
-    guid: u64,
+    data: Arc<RwLock<BootEnvironment>>,
     client: Arc<dyn Client>,
 }
 
 impl BootEnvironmentObject {
-    pub fn new(name: String, guid: u64, client: Arc<dyn Client>) -> Self {
-        Self { name, guid, client }
+    pub fn new(data: BootEnvironment, client: Arc<dyn Client>) -> Self {
+        Self {
+            data: Arc::new(RwLock::new(data)),
+            client,
+        }
     }
 
-    /// Helper method to get the BootEnvironment data for this object
-    fn get_boot_environment(&self) -> Result<BootEnvironment, BeError> {
-        let envs = self.client.get_boot_environments()?;
-        envs.into_iter()
-            .find(|be| be.name == self.name)
-            .ok_or_else(|| BeError::not_found(&self.name))
+    /// Synchronize the object with the current state of the boot environment
+    /// and emit property changed signals as needed.
+    pub async fn sync(
+        &self,
+        current: BootEnvironment,
+        signal_emitter: &SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
+        let stored = self.data.read().expect("Failed to acquire read lock");
+
+        // Check if any fields have actually changed.
+        let name = stored.name != current.name;
+        let path = stored.path != current.path;
+        let description = stored.description != current.description;
+        let mountpoint = stored.mountpoint != current.mountpoint;
+        let next_boot = stored.next_boot != current.next_boot;
+        let boot_once = stored.boot_once != current.boot_once;
+        let space = stored.space != current.space;
+
+        if !(name || path || description || mountpoint || next_boot || boot_once || space) {
+            return Ok(());
+        }
+
+        // Upgrade from a read lock to a write lock.
+        drop(stored);
+        {
+            *self.data.write().expect("Failed to acquire write lock") = current;
+        } // Write lock dropped.
+
+        // Emit signals now that the data has been updated (and the write lock
+        // released).
+        if name {
+            self.name_changed(signal_emitter).await?;
+        }
+        if path {
+            self.path_changed(signal_emitter).await?;
+        }
+        if description {
+            self.description_changed(signal_emitter).await?;
+        }
+        if mountpoint {
+            self.mountpoint_changed(signal_emitter).await?;
+        }
+        if next_boot {
+            self.next_boot_changed(signal_emitter).await?;
+        }
+        if boot_once {
+            self.boot_once_changed(signal_emitter).await?;
+        }
+        if space {
+            self.space_changed(signal_emitter).await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -305,68 +354,67 @@ impl BootEnvironmentObject {
 impl BootEnvironmentObject {
     /// Boot environment name
     #[zbus(property)]
-    fn name(&self) -> &str {
-        &self.name
+    fn name(&self) -> String {
+        self.data.read().unwrap().name.clone()
     }
 
     /// Boot environment dataset path
     #[zbus(property)]
-    fn path(&self) -> zbus::fdo::Result<String> {
-        let env = self.get_boot_environment()?;
-        Ok(env.path)
+    fn path(&self) -> String {
+        self.data.read().unwrap().path.clone()
     }
 
     /// Boot environment description
     #[zbus(property)]
-    fn description(&self) -> zbus::fdo::Result<String> {
-        let env = self.get_boot_environment()?;
-        Ok(env.description.unwrap_or_default())
+    fn description(&self) -> String {
+        self.data
+            .read()
+            .unwrap()
+            .description
+            .clone()
+            .unwrap_or_default()
     }
 
     /// Current mountpoint (empty if not mounted)
     #[zbus(property)]
-    fn mountpoint(&self) -> zbus::fdo::Result<String> {
-        let env = self.get_boot_environment()?;
-        Ok(env
+    fn mountpoint(&self) -> String {
+        self.data
+            .read()
+            .unwrap()
             .mountpoint
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_default())
+            .unwrap_or_default()
     }
 
     /// Whether this is the currently active boot environment
     #[zbus(property(emits_changed_signal = "const"))]
-    fn active(&self) -> zbus::fdo::Result<bool> {
-        let env = self.get_boot_environment()?;
-        Ok(env.active)
+    fn active(&self) -> bool {
+        self.data.read().unwrap().active
     }
 
     /// Whether this BE will be used for next boot
     #[zbus(property)]
-    fn next_boot(&self) -> zbus::fdo::Result<bool> {
-        let env = self.get_boot_environment()?;
-        Ok(env.next_boot)
+    fn next_boot(&self) -> bool {
+        self.data.read().unwrap().next_boot
     }
 
     /// Whether this BE is set for one-time boot
     #[zbus(property)]
-    fn boot_once(&self) -> zbus::fdo::Result<bool> {
-        let env = self.get_boot_environment()?;
-        Ok(env.boot_once)
+    fn boot_once(&self) -> bool {
+        self.data.read().unwrap().boot_once
     }
 
     /// Space used by this boot environment in bytes
     #[zbus(property)]
-    fn space(&self) -> zbus::fdo::Result<u64> {
-        let env = self.get_boot_environment()?;
-        Ok(env.space)
+    fn space(&self) -> u64 {
+        self.data.read().unwrap().space
     }
 
     /// Creation timestamp (Unix time)
     #[zbus(property(emits_changed_signal = "const"))]
-    fn created(&self) -> zbus::fdo::Result<i64> {
-        let env = self.get_boot_environment()?;
-        Ok(env.created)
+    fn created(&self) -> i64 {
+        self.data.read().unwrap().created
     }
 
     /// Destroy this boot environment
@@ -376,8 +424,12 @@ impl BootEnvironmentObject {
         force_no_verify: bool,
         snapshots: bool,
     ) -> zbus::fdo::Result<()> {
-        self.client
-            .destroy(&self.name, force_unmount, force_no_verify, snapshots)?;
+        self.client.destroy(
+            &self.data.read().unwrap().name,
+            force_unmount,
+            force_no_verify,
+            snapshots,
+        )?;
         Ok(())
     }
 
@@ -389,43 +441,49 @@ impl BootEnvironmentObject {
             MountMode::ReadWrite
         };
 
-        self.client.mount(&self.name, mountpoint, mode)?;
+        self.client
+            .mount(&self.data.read().unwrap().name, mountpoint, mode)?;
         Ok(())
     }
 
     /// Unmount this boot environment
     fn unmount(&self, force: bool) -> zbus::fdo::Result<String> {
-        let result = self.client.unmount(&self.name, force)?;
+        let result = self
+            .client
+            .unmount(&self.data.read().unwrap().name, force)?;
         Ok(result.map(|p| p.display().to_string()).unwrap_or_default())
     }
 
     /// Rename this boot environment
     fn rename(&self, new_name: &str) -> zbus::fdo::Result<()> {
-        self.client.rename(&self.name, new_name)?;
+        self.client
+            .rename(&self.data.read().unwrap().name, new_name)?;
         Ok(())
     }
 
     /// Activate this boot environment
     fn activate(&self, temporary: bool) -> zbus::fdo::Result<()> {
-        self.client.activate(&self.name, temporary)?;
+        self.client
+            .activate(&self.data.read().unwrap().name, temporary)?;
         Ok(())
     }
 
     /// Deactivate this boot environment
     fn deactivate(&self) -> zbus::fdo::Result<()> {
-        self.client.deactivate(&self.name)?;
+        self.client.deactivate(&self.data.read().unwrap().name)?;
         Ok(())
     }
 
     /// Rollback to a snapshot
     fn rollback(&self, snapshot: &str) -> zbus::fdo::Result<()> {
-        self.client.rollback(&self.name, snapshot)?;
+        self.client
+            .rollback(&self.data.read().unwrap().name, snapshot)?;
         Ok(())
     }
 
     /// Get snapshots for this boot environment
     fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, String, u64, i64)>> {
-        let snapshots = self.client.get_snapshots(&self.name)?;
+        let snapshots = self.client.get_snapshots(&self.data.read().unwrap().name)?;
         Ok(snapshots
             .into_iter()
             .map(|snap| (snap.name, snap.path, snap.space, snap.created))
@@ -434,7 +492,7 @@ impl BootEnvironmentObject {
 
     /// Get host ID for this boot environment
     fn get_hostid(&self) -> zbus::fdo::Result<u32> {
-        let hostid = self.client.hostid(&self.name)?;
+        let hostid = self.client.hostid(&self.data.read().unwrap().name)?;
         Ok(hostid.unwrap_or(0))
     }
 }
@@ -455,7 +513,7 @@ impl BeadmManager {
     }
 
     /// Refresh the managed objects to match current boot environments
-    pub fn refresh_objects(&self, object_server: &ObjectServer) -> ZbusResult<()> {
+    pub async fn refresh_objects(&self, object_server: &ObjectServer) -> ZbusResult<()> {
         let envs = self.client.get_boot_environments()?;
         let object_manager =
             object_server.interface::<_, BeadmObjectManager>("/org/beadm/Manager")?;
@@ -464,7 +522,10 @@ impl BeadmManager {
         // Remove objects that no longer exist
         let mut to_remove = Vec::new();
         for (path, obj) in objects.iter() {
-            if !envs.iter().any(|be| be.guid == obj.guid) {
+            if !envs
+                .iter()
+                .any(|be| be.guid == obj.data.read().unwrap().guid)
+            {
                 to_remove.push(path.clone());
             }
         }
@@ -474,22 +535,34 @@ impl BeadmManager {
             let _ = object_server.remove::<BootEnvironmentObject, _>(path.as_str());
 
             // Emit an InterfacesRemoved signal.
-            block_on(BeadmObjectManager::interfaces_removed(
+            BeadmObjectManager::interfaces_removed(
                 object_manager.signal_emitter(),
                 path,
                 vec!["org.beadm.BootEnvironment".to_string()],
-            ))?;
+            )
+            .await?;
+        }
+
+        // Build a map of GUID to BootEnvironment for efficient lookup
+        let env_map: std::collections::HashMap<u64, &BootEnvironment> =
+            envs.iter().map(|env| (env.guid, env)).collect();
+
+        // Sync existing objects to detect property changes
+        for (path, obj) in objects.iter() {
+            let obj_guid = obj.data.read().unwrap().guid;
+            if let Some(new_env) = env_map.get(&obj_guid) {
+                let obj_iface =
+                    object_server.interface::<_, BootEnvironmentObject>(path.as_str())?;
+                obj.sync((**new_env).clone(), obj_iface.signal_emitter())
+                    .await?;
+            }
         }
 
         // Add new objects
         for env in &envs {
             let path = be_object_path(env.guid);
             if !objects.contains_key(&path) {
-                let obj = BootEnvironmentObject::new(
-                    env.name.clone(),
-                    env.guid,
-                    Arc::clone(&self.client),
-                );
+                let obj = BootEnvironmentObject::new(env.clone(), Arc::clone(&self.client));
                 object_server.at(&path, obj.clone())?;
                 objects.insert(path.clone(), Arc::new(obj));
 
@@ -498,11 +571,8 @@ impl BeadmManager {
                     object_server.interface::<_, BeadmObjectManager>("/org/beadm/Manager")?;
                 let mut interfaces = BTreeMap::new();
                 interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
-                block_on(BeadmObjectManager::interfaces_added(
-                    iface_ref.signal_emitter(),
-                    path,
-                    interfaces,
-                ))?;
+                BeadmObjectManager::interfaces_added(iface_ref.signal_emitter(), path, interfaces)
+                    .await?;
             }
         }
 
@@ -648,12 +718,12 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     );
 
     // Initial population of objects
-    manager.refresh_objects(&connection.object_server())?;
+    block_on(manager.refresh_objects(&connection.object_server()))?;
 
     // Keep the connection alive and periodically refresh objects
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Err(e) = manager.refresh_objects(&connection.object_server()) {
+        if let Err(e) = block_on(manager.refresh_objects(&connection.object_server())) {
             eprintln!("Error refreshing objects: {}", e);
         }
     }
