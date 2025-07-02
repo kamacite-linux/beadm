@@ -4,9 +4,8 @@ use async_io::block_on;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use zbus::blocking::{Connection, connection};
 use zbus::object_server::SignalEmitter;
-use zbus::{Result as ZbusResult, interface};
+use zbus::{Connection, Result as ZbusResult, blocking, interface};
 use zvariant::ObjectPath;
 
 // D-Bus service constants
@@ -22,23 +21,18 @@ fn be_object_path(guid: u64) -> ObjectPath<'static> {
     ObjectPath::try_from(format!("{}/{:016x}", BOOT_ENV_PATH, guid)).unwrap()
 }
 
-// ============================================================================
-// D-Bus Client (RemoteClient)
-// ============================================================================
-
-pub struct RemoteClient {
-    connection: Connection,
+// A D-Bus proxy (remote object) for boot environment administration.
+//
+// Implements the traditional `beadm` commands as D-Bus method calls.
+pub struct ClientProxy {
+    connection: blocking::Connection,
 }
 
-impl RemoteClient {
-    pub fn new(use_session_bus: bool) -> Result<Self, BeError> {
-        let connection = if use_session_bus {
-            Connection::session()
-        } else {
-            Connection::system()
-        }?;
-
-        Ok(Self { connection })
+impl ClientProxy {
+    pub fn new(connection: Connection) -> Result<Self, BeError> {
+        Ok(Self {
+            connection: connection.into(),
+        })
     }
 
     /// Get the GUID for a boot environment by name
@@ -51,7 +45,7 @@ impl RemoteClient {
     }
 }
 
-impl Client for RemoteClient {
+impl Client for ClientProxy {
     fn create(
         &self,
         be_name: &str,
@@ -730,9 +724,9 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     let client: Arc<dyn Client> = Arc::new(client);
 
     let builder = if use_session_bus {
-        connection::Builder::session()?
+        blocking::connection::Builder::session()?
     } else {
-        connection::Builder::system()?
+        blocking::connection::Builder::system()?
     };
 
     let connection = builder

@@ -1,3 +1,4 @@
+use async_io::block_on;
 use chrono::{Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -8,7 +9,7 @@ mod dbus;
 use be::mock::EmulatorClient;
 use be::zfs::{LibZfsClient, format_zfs_bytes};
 use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
-use dbus::{RemoteClient, serve};
+use dbus::{ClientProxy, serve};
 
 #[derive(Parser)]
 #[command(name = "beadm")]
@@ -518,7 +519,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             execute_command(&cli.command, client)?;
         }
         ClientType::DBus => {
-            let client = RemoteClient::new(false)?; // Use system bus by default
+            // Use the system bus by default.
+            let connection = block_on(zbus::Connection::system())?;
+            let client = ClientProxy::new(connection)?;
             execute_command(&cli.command, client)?;
         }
         ClientType::LibZfs => {
