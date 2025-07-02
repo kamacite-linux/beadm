@@ -721,8 +721,6 @@ impl BeadmObjectManager {
 /// Start a D-Bus service for boot environment administration.
 pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResult<()> {
     let client: Arc<dyn Client> = Arc::new(client);
-    let manager = Arc::new(BeadmManager::new(Arc::clone(&client)));
-    let object_manager = Arc::new(BeadmObjectManager::new(client));
 
     let builder = if use_session_bus {
         connection::Builder::session()?
@@ -732,8 +730,8 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
 
     let connection = builder
         .name("org.beadm.Manager")?
-        .serve_at("/org/beadm/Manager", (*manager).clone())?
-        .serve_at("/org/beadm/Manager", (*object_manager).clone())?
+        .serve_at("/org/beadm/Manager", BeadmManager::new(client.clone()))?
+        .serve_at("/org/beadm/Manager", BeadmObjectManager::new(client))?
         .build()?;
 
     let bus_type = if use_session_bus { "session" } else { "system" };
@@ -743,12 +741,15 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     );
 
     // Initial population of objects
-    block_on(manager.refresh(&connection.object_server().inner()))?;
+    let manager = &connection
+        .object_server()
+        .interface::<_, BeadmManager>("/org/beadm/Manager")?;
+    block_on(manager.get().refresh(&connection.object_server().inner()))?;
 
     // Keep the connection alive and periodically refresh objects
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Err(e) = block_on(manager.refresh(&connection.object_server().inner())) {
+        if let Err(e) = block_on(manager.get().refresh(&connection.object_server().inner())) {
             eprintln!("Error refreshing objects: {}", e);
         }
     }
