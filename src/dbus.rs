@@ -1,11 +1,9 @@
 use crate::be::Error as BeError;
 use crate::be::{BootEnvironment, Client, MountMode, Snapshot};
 use async_io::block_on;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use zbus::blocking::ObjectServer;
 use zbus::blocking::{Connection, connection};
 use zbus::object_server::SignalEmitter;
 use zbus::{Result as ZbusResult, interface};
@@ -501,78 +499,83 @@ impl BootEnvironmentObject {
 #[derive(Clone)]
 pub struct BeadmManager {
     client: Arc<dyn Client>,
-    objects: Arc<Mutex<HashMap<ObjectPath<'static>, Arc<BootEnvironmentObject>>>>,
+    guids: Arc<Mutex<HashSet<u64>>>,
 }
 
 impl BeadmManager {
     pub fn new(client: Arc<dyn Client>) -> Self {
         Self {
             client,
-            objects: Arc::new(Mutex::new(HashMap::new())),
+            guids: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
-    /// Refresh the managed objects to match current boot environments
-    pub async fn refresh_objects(&self, object_server: &ObjectServer) -> ZbusResult<()> {
-        let envs = self.client.get_boot_environments()?;
-        let object_manager =
-            object_server.interface::<_, BeadmObjectManager>("/org/beadm/Manager")?;
-        let mut objects = self.objects.lock().unwrap();
+    /// Refresh managed objects.
+    pub async fn refresh(&self, object_server: &zbus::ObjectServer) -> zbus::fdo::Result<()> {
+        let mut envs: HashMap<u64, BootEnvironment> = self
+            .client
+            .get_boot_environments()?
+            .into_iter()
+            .map(|env| (env.guid, env))
+            .collect();
+        let object_manager = object_server
+            .interface::<_, BeadmObjectManager>("/org/beadm/Manager")
+            .await?;
+        let mut guids = self.guids.lock().unwrap();
 
-        // Remove objects that no longer exist
+        // Sync current boot environments to the objects we already have.
         let mut to_remove = Vec::new();
-        for (path, obj) in objects.iter() {
-            if !envs
-                .iter()
-                .any(|be| be.guid == obj.data.read().unwrap().guid)
-            {
-                to_remove.push(path.clone());
+        for guid in guids.iter() {
+            let path = be_object_path(*guid);
+            if let Some(current) = envs.remove(guid) {
+                let iface = object_server
+                    .interface::<_, BootEnvironmentObject>(path)
+                    .await?;
+                iface
+                    .get()
+                    .await
+                    .sync(current, iface.signal_emitter())
+                    .await?;
+            } else {
+                to_remove.push(*guid);
             }
         }
 
-        for path in to_remove {
-            objects.remove(&path);
-            let _ = object_server.remove::<BootEnvironmentObject, _>(path.as_str());
+        // Remove objects for boot environments that no longer exist.
+        for guid in to_remove.into_iter() {
+            let path = be_object_path(guid);
+            object_server
+                .remove::<BootEnvironmentObject, _>(&path)
+                .await?;
 
-            // Emit an InterfacesRemoved signal.
+            // Emit an InterfacesRemoved signal, even if the object was not
+            // destroyed by remove().
             BeadmObjectManager::interfaces_removed(
                 object_manager.signal_emitter(),
-                path,
+                &path,
                 vec!["org.beadm.BootEnvironment".to_string()],
             )
             .await?;
+
+            guids.remove(&guid);
         }
 
-        // Build a map of GUID to BootEnvironment for efficient lookup
-        let env_map: std::collections::HashMap<u64, &BootEnvironment> =
-            envs.iter().map(|env| (env.guid, env)).collect();
-
-        // Sync existing objects to detect property changes
-        for (path, obj) in objects.iter() {
-            let obj_guid = obj.data.read().unwrap().guid;
-            if let Some(new_env) = env_map.get(&obj_guid) {
-                let obj_iface =
-                    object_server.interface::<_, BootEnvironmentObject>(path.as_str())?;
-                obj.sync((**new_env).clone(), obj_iface.signal_emitter())
+        // Add objects for new boot environments.
+        for (guid, env) in envs.drain() {
+            if guids.insert(guid) {
+                let obj = BootEnvironmentObject::new(env.clone(), self.client.clone());
+                let path = be_object_path(guid);
+                if object_server.at(&path, obj).await? {
+                    // Emit an InterfacesAdded signal after successful at().
+                    let mut interfaces = BTreeMap::new();
+                    interfaces.insert("org.beadm.BootEnvironment".to_string(), &env);
+                    BeadmObjectManager::interfaces_added(
+                        object_manager.signal_emitter(),
+                        &path,
+                        interfaces,
+                    )
                     .await?;
-            }
-        }
-
-        // Add new objects
-        for env in &envs {
-            let path = be_object_path(env.guid);
-            if !objects.contains_key(&path) {
-                let obj = BootEnvironmentObject::new(env.clone(), Arc::clone(&self.client));
-                object_server.at(&path, obj.clone())?;
-                objects.insert(path.clone(), Arc::new(obj));
-
-                // Emit an InterfacesAdded signal.
-                let iface_ref =
-                    object_server.interface::<_, BeadmObjectManager>("/org/beadm/Manager")?;
-                let mut interfaces = BTreeMap::new();
-                interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
-                BeadmObjectManager::interfaces_added(iface_ref.signal_emitter(), path, interfaces)
-                    .await?;
+                }
             }
         }
 
@@ -680,7 +683,7 @@ impl BeadmObjectManager {
     #[zbus(signal)]
     async fn interfaces_added(
         emitter: &SignalEmitter<'_>,
-        object_path: ObjectPath<'_>,
+        object_path: &ObjectPath<'_>,
         interfaces_and_properties: BTreeMap<String, &BootEnvironment>,
     ) -> zbus::Result<()>;
 
@@ -688,7 +691,7 @@ impl BeadmObjectManager {
     #[zbus(signal)]
     async fn interfaces_removed(
         emitter: &SignalEmitter<'_>,
-        object_path: ObjectPath<'_>,
+        object_path: &ObjectPath<'_>,
         interfaces: Vec<String>,
     ) -> zbus::Result<()>;
 }
@@ -718,12 +721,12 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     );
 
     // Initial population of objects
-    block_on(manager.refresh_objects(&connection.object_server()))?;
+    block_on(manager.refresh(&connection.object_server().inner()))?;
 
     // Keep the connection alive and periodically refresh objects
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Err(e) = block_on(manager.refresh_objects(&connection.object_server())) {
+        if let Err(e) = block_on(manager.refresh(&connection.object_server().inner())) {
             eprintln!("Error refreshing objects: {}", e);
         }
     }
