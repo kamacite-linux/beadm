@@ -299,48 +299,66 @@ impl BootEnvironmentObject {
         current: BootEnvironment,
         signal_emitter: &SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
-        let stored = self.data.read().expect("Failed to acquire read lock");
-
         // Check if any fields have actually changed.
-        let name = stored.name != current.name;
-        let path = stored.path != current.path;
-        let description = stored.description != current.description;
-        let mountpoint = stored.mountpoint != current.mountpoint;
-        let next_boot = stored.next_boot != current.next_boot;
-        let boot_once = stored.boot_once != current.boot_once;
-        let space = stored.space != current.space;
+        struct Changed {
+            name: bool,
+            path: bool,
+            description: bool,
+            mountpoint: bool,
+            next_boot: bool,
+            boot_once: bool,
+            space: bool,
+        }
+        let changed = self
+            .data
+            .read() // Use map() to simplify guard lifetime across await calls below.
+            .map(|stored| Changed {
+                name: stored.name != current.name,
+                path: stored.path != current.path,
+                description: stored.description != current.description,
+                mountpoint: stored.mountpoint != current.mountpoint,
+                next_boot: stored.next_boot != current.next_boot,
+                boot_once: stored.boot_once != current.boot_once,
+                space: stored.space != current.space,
+            })
+            .expect("Failed to acquire read lock");
 
-        if !(name || path || description || mountpoint || next_boot || boot_once || space) {
+        if !(changed.name
+            || changed.path
+            || changed.description
+            || changed.mountpoint
+            || changed.next_boot
+            || changed.boot_once
+            || changed.space)
+        {
             return Ok(());
         }
 
-        // Upgrade from a read lock to a write lock.
-        drop(stored);
         {
             *self.data.write().expect("Failed to acquire write lock") = current;
         } // Write lock dropped.
 
         // Emit signals now that the data has been updated (and the write lock
         // released).
-        if name {
+        if changed.name {
             self.name_changed(signal_emitter).await?;
         }
-        if path {
+        if changed.path {
             self.path_changed(signal_emitter).await?;
         }
-        if description {
+        if changed.description {
             self.description_changed(signal_emitter).await?;
         }
-        if mountpoint {
+        if changed.mountpoint {
             self.mountpoint_changed(signal_emitter).await?;
         }
-        if next_boot {
+        if changed.next_boot {
             self.next_boot_changed(signal_emitter).await?;
         }
-        if boot_once {
+        if changed.boot_once {
             self.boot_once_changed(signal_emitter).await?;
         }
-        if space {
+        if changed.space {
             self.space_changed(signal_emitter).await?;
         }
 
@@ -509,9 +527,15 @@ impl BeadmManager {
             guids: Arc::new(Mutex::new(HashSet::new())),
         }
     }
+}
 
+#[interface(name = "org.beadm.Manager")]
+impl BeadmManager {
     /// Refresh managed objects.
-    pub async fn refresh(&self, object_server: &zbus::ObjectServer) -> zbus::fdo::Result<()> {
+    pub async fn refresh(
+        &self,
+        #[zbus(object_server)] object_server: &zbus::ObjectServer,
+    ) -> zbus::fdo::Result<()> {
         let mut envs: HashMap<u64, BootEnvironment> = self
             .client
             .get_boot_environments()?
@@ -521,7 +545,7 @@ impl BeadmManager {
         let object_manager = object_server
             .interface::<_, BeadmObjectManager>("/org/beadm/Manager")
             .await?;
-        let mut guids = self.guids.lock().unwrap();
+        let mut guids = self.guids.lock().unwrap().clone(); // Clone to get Send.
 
         // Sync current boot environments to the objects we already have.
         let mut to_remove = Vec::new();
@@ -579,12 +603,10 @@ impl BeadmManager {
             }
         }
 
+        *self.guids.lock().unwrap() = guids;
         Ok(())
     }
-}
 
-#[interface(name = "org.beadm.Manager")]
-impl BeadmManager {
     /// Create a new boot environment by cloning an existing one
     fn create(
         &self,
