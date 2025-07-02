@@ -9,10 +9,17 @@ use zbus::object_server::SignalEmitter;
 use zbus::{Result as ZbusResult, interface};
 use zvariant::ObjectPath;
 
+// D-Bus service constants
+const SERVICE_NAME: &str = "org.beadm.Manager";
+const MANAGER_INTERFACE: &str = "org.beadm.Manager";
+const BOOT_ENV_INTERFACE: &str = "org.beadm.BootEnvironment";
+const MANAGER_PATH: &str = "/org/beadm/Manager";
+const BOOT_ENV_PATH: &str = "/org/beadm/BootEnvironments";
+
 /// Translate a boot environment GUID to a D-Bus object path.
 fn be_object_path(guid: u64) -> ObjectPath<'static> {
     // This is safe to unwrap because hex strings are always valid object path components.
-    ObjectPath::try_from(format!("/org/beadm/BootEnvironments/{:016x}", guid)).unwrap()
+    ObjectPath::try_from(format!("{}/{:016x}", BOOT_ENV_PATH, guid)).unwrap()
 }
 
 // ============================================================================
@@ -59,9 +66,9 @@ impl Client for RemoteClient {
         let _result: String = self
             .connection
             .call_method(
-                Some("org.beadm.Manager"),
-                "/org/beadm/Manager",
-                Some("org.beadm.Manager"),
+                Some(SERVICE_NAME),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
                 "create",
                 &(be_name, desc, src, props),
             )?
@@ -85,9 +92,9 @@ impl Client for RemoteClient {
         let _result: String = self
             .connection
             .call_method(
-                Some("org.beadm.Manager"),
-                "/org/beadm/Manager",
-                Some("org.beadm.Manager"),
+                Some(SERVICE_NAME),
+                MANAGER_PATH,
+                Some(MANAGER_INTERFACE),
                 "create_new",
                 &(be_name, desc, hid, props),
             )?
@@ -106,9 +113,9 @@ impl Client for RemoteClient {
     ) -> Result<(), BeError> {
         let guid = self.get_be_guid(target)?;
         self.connection.call_method(
-            Some("org.beadm.Manager"),
+            Some(SERVICE_NAME),
             &be_object_path(guid),
-            Some("org.beadm.BootEnvironment"),
+            Some(BOOT_ENV_INTERFACE),
             "destroy",
             &(force_unmount, force_no_verify, snapshots),
         )?;
@@ -122,9 +129,9 @@ impl Client for RemoteClient {
         };
         let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
-            Some("org.beadm.Manager"),
+            Some(SERVICE_NAME),
             &be_object_path(guid),
-            Some("org.beadm.BootEnvironment"),
+            Some(BOOT_ENV_INTERFACE),
             "mount",
             &(mountpoint, read_only),
         )?;
@@ -136,9 +143,9 @@ impl Client for RemoteClient {
         let result: String = self
             .connection
             .call_method(
-                Some("org.beadm.Manager"),
+                Some(SERVICE_NAME),
                 &be_object_path(guid),
-                Some("org.beadm.BootEnvironment"),
+                Some(BOOT_ENV_INTERFACE),
                 "unmount",
                 &(force,),
             )?
@@ -157,9 +164,9 @@ impl Client for RemoteClient {
         let hostid: u32 = self
             .connection
             .call_method(
-                Some("org.beadm.Manager"),
+                Some(SERVICE_NAME),
                 &be_object_path(guid),
-                Some("org.beadm.BootEnvironment"),
+                Some(BOOT_ENV_INTERFACE),
                 "get_hostid",
                 &(),
             )?
@@ -176,9 +183,9 @@ impl Client for RemoteClient {
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
         let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
-            Some("org.beadm.Manager"),
+            Some(SERVICE_NAME),
             &be_object_path(guid),
-            Some("org.beadm.BootEnvironment"),
+            Some(BOOT_ENV_INTERFACE),
             "rename",
             &(new_name,),
         )?;
@@ -188,9 +195,9 @@ impl Client for RemoteClient {
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), BeError> {
         let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
-            Some("org.beadm.Manager"),
+            Some(SERVICE_NAME),
             &be_object_path(guid),
-            Some("org.beadm.BootEnvironment"),
+            Some(BOOT_ENV_INTERFACE),
             "activate",
             &(temporary,),
         )?;
@@ -200,9 +207,9 @@ impl Client for RemoteClient {
     fn deactivate(&self, be_name: &str) -> Result<(), BeError> {
         let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
-            Some("org.beadm.Manager"),
+            Some(SERVICE_NAME),
             &be_object_path(guid),
-            Some("org.beadm.BootEnvironment"),
+            Some(BOOT_ENV_INTERFACE),
             "deactivate",
             &(),
         )?;
@@ -212,9 +219,9 @@ impl Client for RemoteClient {
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
         let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
-            Some("org.beadm.Manager"),
+            Some(SERVICE_NAME),
             &be_object_path(guid),
-            Some("org.beadm.BootEnvironment"),
+            Some(BOOT_ENV_INTERFACE),
             "rollback",
             &(snapshot,),
         )?;
@@ -225,8 +232,8 @@ impl Client for RemoteClient {
         let body = self
             .connection
             .call_method(
-                Some("org.beadm.Manager"),
-                "/org/beadm/Manager",
+                Some(SERVICE_NAME),
+                MANAGER_PATH,
                 Some("org.freedesktop.DBus.ObjectManager"),
                 "GetManagedObjects",
                 &(),
@@ -238,7 +245,7 @@ impl Client for RemoteClient {
 
         let mut boot_environments = Vec::new();
         for (_path, interfaces) in managed_objects {
-            if let Some(be) = interfaces.get("org.beadm.BootEnvironment") {
+            if let Some(be) = interfaces.get(BOOT_ENV_INTERFACE) {
                 boot_environments.push(be.clone());
             }
         }
@@ -250,9 +257,9 @@ impl Client for RemoteClient {
         let snapshots_data: Vec<(String, String, u64, i64)> = self
             .connection
             .call_method(
-                Some("org.beadm.Manager"),
+                Some(SERVICE_NAME),
                 &be_object_path(guid),
-                Some("org.beadm.BootEnvironment"),
+                Some(BOOT_ENV_INTERFACE),
                 "get_snapshots",
                 &(),
             )?
@@ -543,7 +550,7 @@ impl BeadmManager {
             .map(|env| (env.guid, env))
             .collect();
         let object_manager = object_server
-            .interface::<_, BeadmObjectManager>("/org/beadm/Manager")
+            .interface::<_, BeadmObjectManager>(MANAGER_PATH)
             .await?;
         let mut guids = self.guids.lock().unwrap().clone(); // Clone to get Send.
 
@@ -577,7 +584,7 @@ impl BeadmManager {
             BeadmObjectManager::interfaces_removed(
                 object_manager.signal_emitter(),
                 &path,
-                vec!["org.beadm.BootEnvironment".to_string()],
+                vec![BOOT_ENV_INTERFACE.to_string()],
             )
             .await?;
 
@@ -592,7 +599,7 @@ impl BeadmManager {
                 if object_server.at(&path, obj).await? {
                     // Emit an InterfacesAdded signal after successful at().
                     let mut interfaces = BTreeMap::new();
-                    interfaces.insert("org.beadm.BootEnvironment".to_string(), &env);
+                    interfaces.insert(BOOT_ENV_INTERFACE.to_string(), &env);
                     BeadmObjectManager::interfaces_added(
                         object_manager.signal_emitter(),
                         &path,
@@ -695,7 +702,7 @@ impl BeadmObjectManager {
             // We only manage objects with one interface.
             let path = be_object_path(env.guid);
             let mut interfaces = BTreeMap::new();
-            interfaces.insert("org.beadm.BootEnvironment".to_string(), env);
+            interfaces.insert(BOOT_ENV_INTERFACE.to_string(), env);
             objects.insert(path, interfaces);
         }
         Ok(objects)
@@ -729,21 +736,21 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     };
 
     let connection = builder
-        .name("org.beadm.Manager")?
-        .serve_at("/org/beadm/Manager", BeadmManager::new(client.clone()))?
-        .serve_at("/org/beadm/Manager", BeadmObjectManager::new(client))?
+        .name(SERVICE_NAME)?
+        .serve_at(MANAGER_PATH, BeadmManager::new(client.clone()))?
+        .serve_at(MANAGER_PATH, BeadmObjectManager::new(client))?
         .build()?;
 
     let bus_type = if use_session_bus { "session" } else { "system" };
     println!(
-        "D-Bus service started at org.beadm.Manager on {} bus",
-        bus_type
+        "D-Bus service started at {} on {} bus",
+        SERVICE_NAME, bus_type
     );
 
     // Initial population of objects
     let manager = &connection
         .object_server()
-        .interface::<_, BeadmManager>("/org/beadm/Manager")?;
+        .interface::<_, BeadmManager>(MANAGER_PATH)?;
     block_on(manager.get().refresh(&connection.object_server().inner()))?;
 
     // Keep the connection alive and periodically refresh objects
@@ -763,11 +770,11 @@ mod tests {
     fn test_be_object_path() {
         assert_eq!(
             be_object_path(0x1234567890abcdef).as_str(),
-            "/org/beadm/BootEnvironments/1234567890abcdef"
+            format!("{}/1234567890abcdef", BOOT_ENV_PATH)
         );
         assert_eq!(
             be_object_path(0x0).as_str(),
-            "/org/beadm/BootEnvironments/0000000000000000"
+            format!("{}/0000000000000000", BOOT_ENV_PATH)
         );
     }
 }
