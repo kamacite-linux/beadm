@@ -9,11 +9,10 @@ use zbus::{Connection, Result as ZbusResult, blocking, interface};
 use zvariant::ObjectPath;
 
 // D-Bus service constants
-const SERVICE_NAME: &str = "org.beadm.Manager";
-const MANAGER_INTERFACE: &str = "org.beadm.Manager";
-const BOOT_ENV_INTERFACE: &str = "org.beadm.BootEnvironment";
-const MANAGER_PATH: &str = "/org/beadm/Manager";
-const BOOT_ENV_PATH: &str = "/org/beadm/BootEnvironments";
+const SERVICE_NAME: &str = "ca.kamacite.BootEnvironments1";
+const MANAGER_INTERFACE: &str = "ca.kamacite.BootEnvironmentManager";
+const BOOT_ENV_INTERFACE: &str = "ca.kamacite.BootEnvironment";
+const BOOT_ENV_PATH: &str = "/ca/kamacite/BootEnvironments";
 
 /// Translate a boot environment GUID to a D-Bus object path.
 fn be_object_path(guid: u64) -> ObjectPath<'static> {
@@ -61,7 +60,7 @@ impl Client for ClientProxy {
             .connection
             .call_method(
                 Some(SERVICE_NAME),
-                MANAGER_PATH,
+                BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
                 "create",
                 &(be_name, desc, src, props),
@@ -87,7 +86,7 @@ impl Client for ClientProxy {
             .connection
             .call_method(
                 Some(SERVICE_NAME),
-                MANAGER_PATH,
+                BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
                 "create_new",
                 &(be_name, desc, hid, props),
@@ -227,7 +226,7 @@ impl Client for ClientProxy {
             .connection
             .call_method(
                 Some(SERVICE_NAME),
-                MANAGER_PATH,
+                BOOT_ENV_PATH,
                 Some("org.freedesktop.DBus.ObjectManager"),
                 "GetManagedObjects",
                 &(),
@@ -367,7 +366,7 @@ impl BootEnvironmentObject {
     }
 }
 
-#[interface(name = "org.beadm.BootEnvironment")]
+#[interface(name = "ca.kamacite.BootEnvironment")]
 impl BootEnvironmentObject {
     /// Boot environment name
     #[zbus(property)]
@@ -530,7 +529,7 @@ impl BeadmManager {
     }
 }
 
-#[interface(name = "org.beadm.Manager")]
+#[interface(name = "ca.kamacite.BootEnvironmentManager")]
 impl BeadmManager {
     /// Refresh managed objects.
     pub async fn refresh(
@@ -544,7 +543,7 @@ impl BeadmManager {
             .map(|env| (env.guid, env))
             .collect();
         let object_manager = object_server
-            .interface::<_, BeadmObjectManager>(MANAGER_PATH)
+            .interface::<_, BeadmObjectManager>(BOOT_ENV_PATH)
             .await?;
         let mut guids = self.guids.lock().unwrap().clone(); // Clone to get Send.
 
@@ -731,8 +730,8 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
 
     let connection = builder
         .name(SERVICE_NAME)?
-        .serve_at(MANAGER_PATH, BeadmManager::new(client.clone()))?
-        .serve_at(MANAGER_PATH, BeadmObjectManager::new(client))?
+        .serve_at(BOOT_ENV_PATH, BeadmManager::new(client.clone()))?
+        .serve_at(BOOT_ENV_PATH, BeadmObjectManager::new(client))?
         .build()?;
 
     let bus_type = if use_session_bus { "session" } else { "system" };
@@ -744,7 +743,7 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     // Initial population of objects
     let manager = &connection
         .object_server()
-        .interface::<_, BeadmManager>(MANAGER_PATH)?;
+        .interface::<_, BeadmManager>(BOOT_ENV_PATH)?;
     block_on(manager.get().refresh(&connection.object_server().inner()))?;
 
     // Keep the connection alive and periodically refresh objects
