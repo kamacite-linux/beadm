@@ -5,3 +5,8 @@ option('profile',
        choices : ['debug', 'release'],
        value : 'release',
        description : 'Cargo build profile')
+
+option('systemd',
+       type : 'feature',
+       value : 'auto',
+       description : 'Enable systemd support')

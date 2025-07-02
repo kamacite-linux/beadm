@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=@bus_name@
+User=root
+Exec=@bindir@/beadm serve
