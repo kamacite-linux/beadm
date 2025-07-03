@@ -36,7 +36,6 @@ endif
 
 # Configuration data -----------------------------------------------------------
 
-profile = get_option('profile')
 bus_name = 'ca.kamacite.BootEnvironments1'
 conf = configuration_data({'bindir' : bindir, 'bus_name' : bus_name})
 

@@ -18,8 +18,19 @@ cargo_flags = [
         '--target-dir', target_dir,
 ]
 
-if profile == 'release'
+# Partially translate meson's buildtype to cargo flags.
+profile = 'debug'
+if get_option('buildtype') == 'release'
         cargo_flags += ['--release']
+        profile = 'release'
+elif get_option('buildtype') == 'plain'
+        # This is debug=false and opt-level=0.
+        cargo_flags += ['--config', 'profile.dev.debug=false']
+elif get_option('buildtype') == 'debugoptimized'
+        # This is debug=false and opt-level=2.
+        cargo_flags += ['--config', 'profile.dev.opt-level=2']
+elif get_option('buildtype') != 'debug'
+        error('Unsupported build type: ' + get_option('buildtype'))
 endif
 
 cargo_env = []
