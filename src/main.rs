@@ -502,9 +502,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             Ok(())
         }
         Commands::Serve { user } => {
-            serve(client, *user).map_err(|e| Error::ZfsError {
-                message: format!("D-Bus server error: {}", e),
-            })?;
+            serve(client, *user)?;
             Ok(())
         }
     }
