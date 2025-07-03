@@ -29,6 +29,7 @@ impl EmulatorClient {
         hasher.finish()
     }
 
+    #[cfg(test)]
     pub fn empty() -> Self {
         Self {
             root: "zfake/ROOT".to_string(),
