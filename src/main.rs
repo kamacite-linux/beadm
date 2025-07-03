@@ -57,7 +57,7 @@ enum Commands {
         /// Create an empty boot environment instead of cloning
         #[arg(long)]
         empty: bool,
-        /// Set the host ID for empty boot environments
+        /// Set the host ID for empty boot environments. Defaults to the value in /etc/hostid
         #[arg(long)]
         host_id: Option<String>,
         /// Set ZFS properties (property=value)
@@ -403,6 +403,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                     host_id.as_deref(),
                     property,
                 )?;
+                print!("Created empty boot environment '{}'.", be_name);
             } else {
                 client.create(
                     be_name,
@@ -421,7 +422,11 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             force_unmount,
             force_no_verify,
             snapshots,
-        } => client.destroy(target, *force_unmount, *force_no_verify, *snapshots),
+        } => {
+            client.destroy(target, *force_unmount, *force_no_verify, *snapshots)?;
+            print!("Destroyed boot environment '{}'.", target);
+            Ok(())
+        }
         Commands::List {
             be_name,
             all: _,
@@ -477,7 +482,11 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
 
             Ok(())
         }
-        Commands::Rename { be_name, new_name } => client.rename(be_name, new_name),
+        Commands::Rename { be_name, new_name } => {
+            client.rename(be_name, new_name)?;
+            println!("Renamed boot environment '{}' to '{}'.", be_name, new_name);
+            Ok(())
+        }
         Commands::Activate {
             be_name,
             temporary,
@@ -650,6 +659,7 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         let client = EmulatorClient::new(vec![BootEnvironment {
             name: "temp-boot".to_string(),
             path: "zfake/ROOT/temp-boot".to_string(),
+            guid: EmulatorClient::generate_guid("temp-boot"),
             description: None,
             mountpoint: None,
             active: false,
@@ -685,6 +695,114 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         ));
         assert!(!is_temp_mountpoint(&PathBuf::from("/mnt/custom")));
         assert!(!is_temp_mountpoint(&PathBuf::from("/")));
+    }
+
+    #[test]
+    fn test_hostid_command() {
+        let client = EmulatorClient::sampled();
+
+        // Test hostid command execution with existing BE
+        let result = execute_command(
+            &Commands::Hostid {
+                be_name: "default".to_string(),
+            },
+            client,
+        );
+        assert!(result.is_ok());
+
+        // Test with non-existent BE
+        let client2 = EmulatorClient::sampled();
+        let result = execute_command(
+            &Commands::Hostid {
+                be_name: "non-existent".to_string(),
+            },
+            client2,
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
+
+        // Note: Testing the "no hostid found" case (exit code 1) requires
+        // integration tests since it calls std::process::exit(1)
+    }
+
+    #[test]
+    fn test_mount_command_with_mountpoint() {
+        let client = EmulatorClient::sampled();
+
+        // Test mount with specified mountpoint
+        let result = execute_command(
+            &Commands::Mount {
+                be_name: "alt".to_string(),
+                mountpoint: Some("/mnt/test".to_string()),
+                mode: MountMode::ReadWrite,
+            },
+            client,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mount_command_temp_directory() {
+        let client = EmulatorClient::sampled();
+
+        // Test mount without mountpoint (temp directory)
+        let result = execute_command(
+            &Commands::Mount {
+                be_name: "alt".to_string(),
+                mountpoint: None,
+                mode: MountMode::ReadOnly,
+            },
+            client,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mount_command_not_found() {
+        let client = EmulatorClient::sampled();
+
+        // Test mount non-existent BE
+        let result = execute_command(
+            &Commands::Mount {
+                be_name: "non-existent".to_string(),
+                mountpoint: Some("/mnt/test".to_string()),
+                mode: MountMode::ReadWrite,
+            },
+            client,
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
+    }
+
+    #[test]
+    fn test_unmount_command() {
+        let client = EmulatorClient::sampled();
+
+        // First mount a BE
+        let mount_result = client.mount("alt", "/mnt/test", MountMode::ReadWrite);
+        assert!(mount_result.is_ok());
+
+        // Then unmount it
+        let result = execute_command(
+            &Commands::Unmount {
+                target: "alt".to_string(),
+                force: false,
+            },
+            client,
+        );
+        assert!(result.is_ok());
+
+        // Test unmount non-existent BE
+        let client2 = EmulatorClient::sampled();
+        let result = execute_command(
+            &Commands::Unmount {
+                target: "non-existent".to_string(),
+                force: false,
+            },
+            client2,
+        );
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
     }
 
     #[test]

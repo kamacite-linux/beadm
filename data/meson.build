@@ -23,3 +23,13 @@ else
 endif
 
 install_data(dbus_service, install_dir : dbus_service_dir)
+
+dbus_policy = configure_file(
+        configuration : conf,
+        input : 'dbus-policy.conf.in',
+        output : 'beadm.conf')
+
+install_data(dbus_policy, install_dir : dbus_policy_dir)
+
+# install_data('ca.kamacite.BootEnvironments1.policy',
+#              install_dir : polkit_actions_dir)

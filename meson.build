@@ -17,13 +17,20 @@ systemd_dep = dependency('systemd', version : '>= 242', required : get_option('s
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
-dbus_service_dir = datadir / 'dbus-1' / 'services'
+dbus_service_dir = datadir / 'dbus-1' / 'system-services'
+# dbus_service_dir = datadir / 'dbus-1' / 'services'
+dbus_policy_dir = datadir / 'dbus-1' / 'system.d'
+# polkit_actions_dir = datadir / 'polkit-1' / 'actions'
 
 summary({
         'prefix' : prefix,
         'bindir' : bindir,
         'datadir' : datadir,
         'dbus' : dbus_service_dir,
+        'opt': get_option('optimization'),
+        'debug': get_option('debug'),
+        'buildtype': get_option('buildtype'),
+        # 'polkit': polkit_actions_dir,
 })
 
 if get_option('systemd').allowed() and systemd_dep.found()
