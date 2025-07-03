@@ -1277,6 +1277,7 @@ mod ffi {
     pub const ZFS_PROP_USED: c_int = 2;
     pub const ZFS_PROP_MOUNTPOINT: c_int = 13;
     pub const ZFS_PROP_CANMOUNT: c_int = 28;
+    pub const ZFS_PROP_GUID: c_int = 42;
 
     // ZPool property constants from sys/fs/zfs.h
     pub const ZPOOL_PROP_BOOTFS: c_int = 7;
