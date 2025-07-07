@@ -9,8 +9,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use super::validation::{validate_component, validate_dataset_name};
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
-// TODO: This isn't a great name.
-const DESCRIPTION_PROP: &str = "beadm:description";
+const DESCRIPTION_PROP: &str = "ca.kamacite:description";
 
 /// A ZFS boot environment client backed by libzfs.
 pub struct LibZfsClient {
