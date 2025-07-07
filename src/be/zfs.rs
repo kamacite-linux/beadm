@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
+use chrono;
+
 use super::validation::{validate_component, validate_dataset_name};
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
@@ -66,17 +68,6 @@ impl LibZfsClient {
         let zpool = Zpool::open(lzh, &self.root.pool())?;
         Ok(zpool.get_bootfs())
     }
-
-    /// Check if a boot environment exists.
-    fn be_exists(&self, be_name: &str) -> Result<bool, Error> {
-        let be_ds = self.root.append(be_name)?;
-        let lzh = LibHandle::get();
-        match Dataset::filesystem(&lzh, &be_ds) {
-            Ok(_) => Ok(true),
-            Err(Error::NotFound { .. }) => Ok(false),
-            Err(e) => Err(e),
-        }
-    }
 }
 
 impl Client for LibZfsClient {
@@ -87,45 +78,94 @@ impl Client for LibZfsClient {
         source: Option<&str>,
         _properties: &[String],
     ) -> Result<(), Error> {
-        // Check if a boot environment with this name already exists.
-        if self.be_exists(be_name)? {
-            return Err(Error::Conflict {
-                name: be_name.to_string(),
-            });
-        }
-
-        // If cloning from source, verify source exists
-        if let Some(src) = source {
-            if !self.be_exists(src)? {
-                return Err(Error::NotFound {
-                    name: src.to_string(),
-                });
-            }
-        }
-
         let be_path = self.root.append(be_name)?;
-
-        // Create the ZFS filesystem
         let lzh = LibHandle::get();
-        let result = unsafe {
-            ffi::zfs_create(
-                lzh.as_ptr(),
-                be_path.as_ptr(),
-                ffi::ZFS_TYPE_FILESYSTEM,
-                ptr::null_mut(),
-            )
+
+        // Create properties nvlist with description if provided
+        let props = if let Some(desc) = description {
+            Some(NvList::from(&[(DESCRIPTION_PROP, desc)])?)
+        } else {
+            None
         };
-        if result != 0 {
-            return Err(lzh.libzfs_error().into());
+
+        let snapshot = match source {
+            Some(src) if src.contains('@') => {
+                // Case #1: beadm create -e EXISTING@SNAPSHOT NAME, which
+                // creates the clone from an existing snapshot of a boot
+                // environment.
+                let parts: Vec<&str> = src.split('@').collect();
+                if parts.len() != 2 {
+                    return Err(Error::InvalidName {
+                        name: src.to_string(),
+                        reason: "too many '@' characters".to_string(),
+                    });
+                }
+
+                // Build the full snapshot path (which handles validation).
+                let source_path = self.root.append(parts[0])?;
+                let snapshot_path = source_path.snapshot(parts[1])?;
+
+                // Open the snapshot (which also verifies it exists).
+                Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
+                    // Special casing for EZFS_NOENT.
+                    if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                        return Error::not_found(src);
+                    }
+                    err
+                })
+            }
+            Some(src) => {
+                // Case #2: beadm create -e EXISTING NAME, which creates the
+                // clone from a new snapshot of a source boot environment.
+                let source_path = self.root.append(src)?;
+
+                // Generate a timestamp-based snapshot name, much like FreeBSD
+                // does for `bectl create`.
+                let snapshot_name = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                let snapshot_path = source_path.snapshot(&snapshot_name)?;
+
+                Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
+                    // Special casing for EZFS_NOENT.
+                    if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                        return Error::not_found(src);
+                    }
+                    err
+                })
+            }
+            None => {
+                // Case #3: beadm create NAME, which creates the clone from a
+                // snapshot of the active boot environment.
+                let source_path = get_rootfs()?.ok_or_else(|| Error::ZfsError {
+                    message: "Not running on ZFS root".to_string(),
+                })?;
+
+                // Generate a timestamp-based snapshot name, much like FreeBSD
+                // does for `bectl create`.
+                let snapshot_name = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+                let snapshot_path = source_path.snapshot(&snapshot_name)?;
+
+                Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref())
+            }
+        }?;
+
+        let mut clone_props = NvList::from(&[("canmount", "noauto"), ("mountpoint", "/")])?;
+        if let Some(desc) = description {
+            clone_props.add_string(DESCRIPTION_PROP, desc)?;
         }
 
-        // Set description if provided
-        if let Some(_desc) = description {
-            // In a real implementation, this would set a user property
-            // zfs_prop_set(zhp, "beadm:description", desc);
-        }
-
-        Ok(())
+        // Clone the source snapshot to create the new boot environment.
+        //
+        // TODO: Investigate 'beadm' for whether we need to handle recursion.
+        // In 'bectl' it is manually specified.
+        snapshot
+            .clone(&lzh, &be_path, Some(&clone_props))
+            .map_err(|err| {
+                // Special casing for EZFS_EEXIST.
+                if let Error::LibzfsError(LibzfsError { errno: 2008, .. }) = err {
+                    return Error::conflict(be_name);
+                }
+                err
+            })
     }
 
     fn new(
@@ -419,6 +459,27 @@ impl Dataset {
         Ok(())
     }
 
+    /// Create a snapshot of a dataset.
+    pub fn create_snapshot(
+        lzh: &LibHandle,
+        snapshot_path: &DatasetName,
+        properties: Option<&NvList>,
+    ) -> Result<Dataset, Error> {
+        let props_ptr = properties.map_or(ptr::null_mut(), |p| p.as_nvlist_ptr());
+        let result = unsafe {
+            ffi::zfs_snapshot(
+                lzh.as_ptr(),
+                snapshot_path.as_ptr(),
+                0, // recursive = false (boolean_t)
+                props_ptr,
+            )
+        };
+        if result != 0 {
+            return Err(lzh.libzfs_error().into());
+        }
+        Dataset::snapshot(lzh, snapshot_path)
+    }
+
     /// Get the dataset name.
     pub fn get_name(&self) -> Option<DatasetName> {
         let name_ptr = unsafe { ffi::zfs_get_name(self.handle) };
@@ -700,6 +761,21 @@ impl Dataset {
             )
         };
         if result == 0 { Some(value) } else { None }
+    }
+
+    /// Clone a dataset from an existing snapshot.
+    pub fn clone(
+        &self,
+        lzh: &LibHandle,
+        name: &DatasetName,
+        properties: Option<&NvList>,
+    ) -> Result<(), Error> {
+        let props_ptr = properties.map_or(ptr::null_mut(), |p| p.as_nvlist_ptr());
+        let result = unsafe { ffi::zfs_clone(self.handle, name.as_ptr(), props_ptr) };
+        if result != 0 {
+            return Err(lzh.libzfs_error().into());
+        }
+        Ok(())
     }
 }
 
@@ -1001,6 +1077,10 @@ impl NvList {
 
     fn as_ptr(&self) -> *mut c_void {
         self.nvl as *mut c_void
+    }
+
+    pub fn as_nvlist_ptr(&self) -> *mut ffi::NvList {
+        self.nvl
     }
 }
 
@@ -1322,6 +1402,15 @@ mod ffi {
         ) -> c_int;
 
         pub fn zfs_destroy(zhp: *mut ZfsHandle, defer: c_int) -> c_int;
+
+        pub fn zfs_snapshot(
+            hdl: *mut LibzfsHandle,
+            path: *const c_char,
+            recursive: c_int, // boolean_t
+            props: *mut NvList,
+        ) -> c_int;
+
+        pub fn zfs_clone(zhp: *mut ZfsHandle, target: *const c_char, props: *mut NvList) -> c_int;
 
         // Mount operations
         pub fn zfs_mount_at(

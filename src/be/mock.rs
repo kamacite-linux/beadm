@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use super::validation::validate_be_name;
+use super::validation::{validate_be_name, validate_component};
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
 
 /// A boot environment client populated with static data that operates
@@ -50,24 +50,71 @@ impl Client for EmulatorClient {
         source: Option<&str>,
         _properties: &[String],
     ) -> Result<(), Error> {
+        // Validate the boot environment name (like libzfs does via self.root.append())
         validate_be_name(be_name, &self.root)?;
 
         let mut bes = self.bes.write().unwrap();
 
-        if bes.iter().any(|be| be.name == be_name) {
-            return Err(Error::Conflict {
-                name: be_name.to_string(),
-            });
-        }
+        let source_space = match source {
+            Some(src) if src.contains('@') => {
+                // Case #1: beadm create -e EXISTING@SNAPSHOT NAME, which
+                // creates the clone from an existing snapshot of a boot
+                // environment.
+                let parts: Vec<&str> = src.split('@').collect();
+                if parts.len() != 2 {
+                    return Err(Error::InvalidName {
+                        name: src.to_string(),
+                        reason: "too many '@' characters".to_string(),
+                    });
+                }
 
-        if let Some(src) = source {
-            // TODO: Differentiate snapshot sources from other boot
-            // environment sources.
-            if !bes.iter().any(|be| be.name == src) {
-                return Err(Error::NotFound {
-                    name: src.to_owned(),
-                });
+                // Validate that be_name is a valid component (not a path)
+                validate_component(parts[0], true)?;
+
+                // Validate that snap_name is a valid component
+                validate_component(parts[1], false)?;
+
+                // Check if the source boot environment exists
+                let source_be = bes
+                    .iter()
+                    .find(|be| be.name == parts[0])
+                    .ok_or_else(|| Error::not_found(src))?;
+
+                // Clone from snapshot - inherit space from source BE
+                source_be.space
             }
+            Some(src) => {
+                // Case #2: beadm create -e EXISTING NAME, which creates the
+                // clone from a new snapshot of a source boot environment.
+                // Validate that src is a valid component (not a path)
+                validate_component(src, true)?;
+
+                // Find the source boot environment to clone
+                let source_be = bes
+                    .iter()
+                    .find(|be| be.name == src)
+                    .ok_or_else(|| Error::not_found(src))?;
+
+                // Clone from existing BE - inherit space
+                source_be.space
+            }
+            None => {
+                // Case #3: beadm create NAME, which creates the clone from a
+                // snapshot of the active boot environment.
+                // Clone from active boot environment, or use default space if none active
+                if let Some(active_be) = bes.iter().find(|be| be.active) {
+                    // Clone from active BE - inherit space
+                    active_be.space
+                } else {
+                    // No active BE (e.g., empty client) - use default space
+                    8192
+                }
+            }
+        };
+
+        // Check for conflicts after determining the source is valid
+        if bes.iter().any(|be| be.name == be_name) {
+            return Err(Error::conflict(be_name));
         }
 
         bes.push(BootEnvironment {
@@ -79,7 +126,7 @@ impl Client for EmulatorClient {
             active: false,
             next_boot: false,
             boot_once: false,
-            space: 8192, // ZFS datasets consume 8K to start.
+            space: source_space, // Inherit space from source
             created: Utc::now().timestamp(),
         });
         Ok(())
@@ -96,9 +143,7 @@ impl Client for EmulatorClient {
 
         // Check for conflicts.
         if bes.iter().any(|be| be.name == be_name) {
-            return Err(Error::Conflict {
-                name: be_name.to_string(),
-            });
+            return Err(Error::conflict(be_name));
         }
 
         // Create new empty boot environment
@@ -1281,5 +1326,114 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
         let snapshots = client.get_snapshots("no-snapshots").unwrap();
         assert_eq!(snapshots.len(), 0);
+    }
+
+    #[test]
+    fn test_emulated_create_from_existing() {
+        let client = EmulatorClient::sampled();
+
+        // Create a new BE from an existing one
+        let result = client.create(
+            "from-default",
+            Some("Cloned from default"),
+            Some("default"),
+            &[],
+        );
+        assert!(result.is_ok());
+
+        // Verify it was created with inherited space from the source
+        let bes = client.get_boot_environments().unwrap();
+        let new_be = bes.iter().find(|be| be.name == "from-default").unwrap();
+        assert_eq!(new_be.description, Some("Cloned from default".to_string()));
+        // Should inherit space from default (950_000_000)
+        assert_eq!(new_be.space, 950_000_000);
+    }
+
+    #[test]
+    fn test_emulated_create_from_snapshot() {
+        let client = EmulatorClient::sampled();
+
+        // Create a new BE from a snapshot
+        let result = client.create(
+            "from-snapshot",
+            Some("From snapshot"),
+            Some("default@2021-06-10-04:30"),
+            &[],
+        );
+        assert!(result.is_ok());
+
+        // Verify it was created with inherited space from the source BE
+        let bes = client.get_boot_environments().unwrap();
+        let new_be = bes.iter().find(|be| be.name == "from-snapshot").unwrap();
+        assert_eq!(new_be.description, Some("From snapshot".to_string()));
+        // Should inherit space from default (950_000_000)
+        assert_eq!(new_be.space, 950_000_000);
+    }
+
+    #[test]
+    fn test_emulated_create_from_active() {
+        let client = EmulatorClient::sampled();
+
+        // Create a new BE from the active one (no source specified)
+        let result = client.create("from-active", Some("Cloned from active"), None, &[]);
+        assert!(result.is_ok());
+
+        // Verify it was created with inherited space from the active BE
+        let bes = client.get_boot_environments().unwrap();
+        let new_be = bes.iter().find(|be| be.name == "from-active").unwrap();
+        assert_eq!(new_be.description, Some("Cloned from active".to_string()));
+        // Should inherit space from default (active BE, 950_000_000)
+        assert_eq!(new_be.space, 950_000_000);
+    }
+
+    #[test]
+    fn test_emulated_create_from_nonexistent_source() {
+        let client = EmulatorClient::sampled();
+
+        // Try to create from non-existent BE
+        let result = client.create("from-nonexistent", None, Some("nonexistent"), &[]);
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+
+        // Try to create from non-existent snapshot
+        let result = client.create("from-bad-snapshot", None, Some("nonexistent@snap"), &[]);
+        assert!(matches!(result, Err(Error::NotFound { .. })));
+    }
+
+    #[test]
+    fn test_emulated_create_invalid_snapshot_format() {
+        let client = EmulatorClient::sampled();
+
+        // Try to create from invalid snapshot format
+        let result = client.create("from-invalid", None, Some("default@snap@extra"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+    }
+
+    #[test]
+    fn test_emulated_create_invalid_components() {
+        let client = EmulatorClient::sampled();
+
+        // Try to create from source with invalid characters (path-like)
+        let result = client.create("new-be", None, Some("zroot/ROOT/default"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+
+        // Try to create from source with invalid component name
+        let result = client.create("new-be", None, Some("-invalid"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+
+        // Try to create from snapshot with invalid BE component
+        let result = client.create("new-be", None, Some("zroot/ROOT/default@snap"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+
+        // Try to create from snapshot with invalid snapshot component
+        let result = client.create("new-be", None, Some("default@invalid#name"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+
+        // Try to create from snapshot with space in BE name
+        let result = client.create("new-be", None, Some("invalid name@snap"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+
+        // Try to create from snapshot with space in snapshot name
+        let result = client.create("new-be", None, Some("default@invalid snap"), &[]);
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
     }
 }
