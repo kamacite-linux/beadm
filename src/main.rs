@@ -12,24 +12,27 @@ use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
 use dbus::{ClientProxy, serve};
 
 #[derive(Parser)]
-#[command(name = "beadm")]
-#[command(about = "Boot Environment Administration")]
-#[command(version)]
+#[command(version, about = "Boot Environment Administration")]
 struct Cli {
     /// Set the boot environment root
     ///
     /// The boot environment root is a dataset whose children are all boot
     /// environments. Defaults to the parent dataset of the active boot
     /// environment.
-    #[arg(short = 'r', long = "root", global = true, group = "Global options")]
+    #[arg(short = 'r', global = true, help_heading = "Global options")]
     beroot: Option<String>,
 
     /// Verbose output
-    #[arg(short = 'v', long = "verbose", global = true, group = "Global options")]
+    #[arg(short = 'v', global = true, help_heading = "Global options")]
     verbose: bool,
 
     /// Client implementation
-    #[arg(long = "client", global = true, default_value = "libzfs")]
+    #[arg(
+        long = "client",
+        global = true,
+        help_heading = "Global options",
+        default_value = "libzfs"
+    )]
     client: ClientType,
 
     #[command(subcommand)]
@@ -38,130 +41,175 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new boot environment
-    Create {
-        /// Boot environment name
+    /// Mark a boot environment as the default root filesystem.
+    Activate {
+        /// The boot environment to activate.
         be_name: String,
-        /// Activate the new boot environment
-        #[arg(short = 'a')]
+
+        /// Activate the boot environment only for the next boot.
+        #[arg(short = 't', conflicts_with = "deactivate")]
+        temporary: bool,
+
+        /// Removes temporary activation.
+        #[arg(short = 'T', conflicts_with = "temporary")]
+        deactivate: bool,
+    },
+    /// Create a new boot environment.
+    Create {
+        /// A name for the new boot environment.
+        be_name: String,
+
+        /// Activate the new boot environment after creating it.
+        #[arg(short = 'a', conflicts_with = "temp_activate")]
         activate: bool,
-        /// Temporarily activate the new boot environment
-        #[arg(short = 't')]
+
+        /// Temporarily activate the new boot environment after creating it.
+        #[arg(short = 't', conflicts_with = "activate")]
         temp_activate: bool,
-        /// Description for the boot environment
-        #[arg(short = 'd', long)]
+
+        /// An optional description for the new boot environment.
+        #[arg(short = 'd')]
         description: Option<String>,
-        /// Clone from existing BE or snapshot
-        #[arg(short = 'e', long)]
-        clone_from: Option<String>,
-        /// Create an empty boot environment instead of cloning
-        #[arg(long)]
+
+        /// Create the new boot environment from this boot environment or
+        /// snapshot, rather than the active one.
+        #[arg(short = 'e', conflicts_with = "empty")]
+        source: Option<String>,
+
+        /// Set additional ZFS properties for the new boot environment (in
+        /// 'property=value' format).
+        #[arg(short = 'o')]
+        property: Vec<String>,
+
+        /// Create an empty boot environment instead of cloning another boot
+        /// environment or snapshot.
+        #[arg(long, conflicts_with_all = vec!["source", "activate", "temp_activate"])]
         empty: bool,
-        /// Set the host ID for empty boot environments. Defaults to the value in /etc/hostid
+
+        /// Set the host ID for empty boot environments. Defaults to the value
+        /// in /etc/hostid
         #[arg(long)]
         host_id: Option<String>,
-        /// Set ZFS properties (property=value)
-        #[arg(short = 'o', long)]
-        property: Vec<String>,
     },
-    /// Destroy a boot environment
+    /// Create a snapshot of a boot environment.
+    Snapshot {
+        /// The boot environment and optional snapshot (in the form 'beName' or
+        /// 'beName@snapshot').
+        ///
+        /// When the snapshot name is omitted, one will be generated
+        /// automatically from the current time.
+        source: Option<String>,
+
+        /// An optional description for the snapshot.
+        #[arg(short = 'd')]
+        description: Option<String>,
+    },
+    /// Destroy an existing boot environment or snapshot.
     Destroy {
-        /// Boot environment name or snapshot (beName@snapshot)
+        /// The boot environment or snapshot (in the form 'beName' or
+        /// 'beName@snapshot').
         target: String,
-        /// Forcefully unmount if needed
+
+        /// Forcefully unmount the boot environment if needed.
         #[arg(short = 'f')]
         force_unmount: bool,
-        /// Force without verification
-        #[arg(short = 'F')]
-        force_no_verify: bool,
-        /// Destroy all snapshots
+
+        /// Destroy snapshots of the boot environment if needed.
         #[arg(short = 's')]
-        snapshots: bool,
+        destroy_snapshots: bool,
+
+        /// Skip interactive verification.
+        #[arg(short = 'F')]
+        no_verify: bool,
     },
-    /// List boot environments
+    /// List boot environments.
     List {
-        /// Boot environment name (optional)
+        /// Include only this boot environment.
         be_name: Option<String>,
-        /// List all information
+
+        /// Include subordinate filesystems and snapshots of each boot environment.
         #[arg(short = 'a')]
         all: bool,
-        /// List subordinate filesystems
-        #[arg(short = 'd')]
+
+        /// Include subordinate filesystems of each boot environment.
+        #[arg(short = 'd', conflicts_with = "all")]
         datasets: bool,
-        /// List snapshots
-        #[arg(short = 's')]
+
+        /// Include snapshots of each boot environment.
+        #[arg(short = 's', conflicts_with = "all")]
         snapshots: bool,
-        /// Omit headers and formatting, separate fields by a single tab
+
+        /// Omit headers and formatting, separate fields by a single tab.
         #[arg(short = 'H')]
         parseable: bool,
-        /// Sort by field, ascending
-        #[arg(short = 'k', default_value = "date")]
+
+        /// Sort boot environments by this property, ascending.
+        #[arg(
+            short = 'k',
+            value_name = "PROP",
+            default_value = "date",
+            conflicts_with = "sort_des"
+        )]
         sort_asc: SortField,
-        /// Sort by field, descending
-        #[arg(short = 'K')]
+
+        /// Sort boot environments by this property, descending.
+        #[arg(short = 'K', value_name = "PROP", conflicts_with = "sort_asc")]
         sort_des: Option<SortField>,
     },
-    /// Mount a boot environment
+    /// Mount a boot environment.
     Mount {
-        /// Boot environment name
+        /// The boot environment to mount.
+        ///
+        /// The active boot environment (i.e. the current root filesystem)
+        /// is already mounted and cannot have its mountpoint changed.
         be_name: String,
-        /// Mount point (if not specified, creates temporary mount in /tmp)
+
+        /// A mount point (if omitted, creates a temporary mount in /tmp).
+        #[arg(value_hint = clap::ValueHint::DirPath)]
         mountpoint: Option<String>,
-        /// Set read/write mode (ro or rw)
-        #[arg(short = 's', long, default_value = "rw")]
+
+        /// Mount as read/write or read-only.
+        #[arg(short = 's', default_value = "rw")]
         mode: MountMode,
     },
-    /// Unmount a boot environment
+    /// Unmount an inactive boot environment.
+    ///
+    /// Unmounting will not remove the mountpoint unless it is one we created.
     Unmount {
-        /// Boot environment name or mount point
-        target: String,
-        /// Force unmount
+        /// The boot environment.
+        ///
+        /// The active boot environment (i.e. the current root filesystem)
+        /// cannot be unmounted.
+        be_name: String,
+
+        /// Force unmounting.
         #[arg(short = 'f')]
         force: bool,
     },
-    /// Rename a boot environment
+    /// Rename a boot environment.
     Rename {
-        /// Current boot environment name
+        /// The boot environment.
         be_name: String,
-        /// New boot environment name
+
+        /// A new name for the boot environment.
         new_name: String,
     },
-    /// Activate a boot environment
-    Activate {
-        /// Boot environment name
-        be_name: String,
-        /// Temporary activation
-        #[arg(short = 't')]
-        temporary: bool,
-        /// Remove temporary activation
-        #[arg(short = 'T')]
-        remove_temp: bool,
-    },
-    /// Rollback to a snapshot
+    /// Roll back a boot environment to an earlier snapshot.
     Rollback {
-        /// Boot environment name
+        /// The boot environment.
         be_name: String,
-        /// Snapshot name
+
+        /// The snapshot name.
         snapshot: String,
     },
-    /// Get the host ID from a boot environment
+    /// Get the host ID from a boot environment.
     Hostid {
-        /// Boot environment name
+        /// The boot environment.
         be_name: String,
     },
-    /// Create a snapshot of a boot environment
-    Snapshot {
-        /// Boot environment name and optional snapshot name (NAME or NAME@SNAPSHOT)
-        /// If no NAME is provided, snapshots the active boot environment
-        /// If no @SNAPSHOT is provided, generates a timestamp-based name
-        source: Option<String>,
-        /// Description for the snapshot
-        #[arg(short = 'd', long)]
-        description: Option<String>,
-    },
-    /// Start the boot environment D-Bus server
+    /// Start the boot environment D-Bus server.
     Serve {
-        /// Run on the session bus instead of the system bus
+        /// Run on the session bus instead of the system bus.
         #[arg(long)]
         user: bool,
     },
@@ -401,10 +449,10 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             activate,
             temp_activate,
             description,
-            clone_from,
+            source,
+            property,
             empty,
             host_id,
-            property,
         } => {
             if *empty {
                 client.new(
@@ -413,28 +461,35 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                     host_id.as_deref(),
                     property,
                 )?;
-                print!("Created empty boot environment '{}'.", be_name);
-            } else {
-                client.create(
-                    be_name,
-                    description.as_deref(),
-                    clone_from.as_deref(),
-                    property,
-                )?;
+                println!("Created empty boot environment '{}'.", be_name);
+                return Ok(());
             }
+
+            client.create(be_name, description.as_deref(), source.as_deref(), property)?;
             if *activate || *temp_activate {
                 client.activate(be_name, *temp_activate)?;
             }
+            println!(
+                "Created {} boot environment '{}'.",
+                if *activate {
+                    "active"
+                } else if *temp_activate {
+                    "temporarily active"
+                } else {
+                    "inactive"
+                },
+                be_name
+            );
             Ok(())
         }
         Commands::Destroy {
             target,
             force_unmount,
-            force_no_verify,
-            snapshots,
+            destroy_snapshots,
+            no_verify,
         } => {
-            client.destroy(target, *force_unmount, *force_no_verify, *snapshots)?;
-            print!("Destroyed boot environment '{}'.", target);
+            client.destroy(target, *force_unmount, *no_verify, *destroy_snapshots)?;
+            println!("Destroyed '{}'.", target);
             Ok(())
         }
         Commands::List {
@@ -448,8 +503,6 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         } => {
             // TODO: Implement -a, -d.
 
-            // TODO: This is a bit lazy; there should probably be an error if
-            // both -k and -K are specified.
             let sort_field = sort_des.unwrap_or(*sort_asc);
             let options = PrintOptions {
                 be_name,
@@ -480,8 +533,8 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             println!("{}", temp_path);
             Ok(())
         }
-        Commands::Unmount { target, force } => {
-            let mountpoint = client.unmount(target, *force)?;
+        Commands::Unmount { be_name, force } => {
+            let mountpoint = client.unmount(be_name, *force)?;
 
             // Check for temporary mountpoints we need to clean up.
             if let Some(mp) = mountpoint {
@@ -500,15 +553,26 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         Commands::Activate {
             be_name,
             temporary,
-            remove_temp,
+            deactivate,
         } => {
-            if *remove_temp {
-                client.deactivate(be_name)
+            if *deactivate {
+                client.deactivate(be_name)?;
+                println!("Removed temporary activation for '{}'.", be_name);
             } else {
-                client.activate(be_name, *temporary)
+                client.activate(be_name, *temporary)?;
+                println!(
+                    "Activated '{}'{}.",
+                    be_name,
+                    if *temporary { " temporarily" } else { "" }
+                );
             }
+            Ok(())
         }
-        Commands::Rollback { be_name, snapshot } => client.rollback(be_name, snapshot),
+        Commands::Rollback { be_name, snapshot } => {
+            client.rollback(be_name, snapshot)?;
+            println!("Rolled back to '{}'.", snapshot);
+            Ok(())
+        }
         Commands::Hostid { be_name } => {
             match client.hostid(be_name)? {
                 Some(id) => println!("0x{:08x}", id),
@@ -525,7 +589,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             description,
         } => {
             let snapshot_name = client.snapshot(source.as_deref(), description.as_deref())?;
-            println!("Created snapshot: {}", snapshot_name);
+            println!("Created '{}'.", snapshot_name);
             Ok(())
         }
         Commands::Serve { user } => {
@@ -803,7 +867,7 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         // Then unmount it
         let result = execute_command(
             &Commands::Unmount {
-                target: "alt".to_string(),
+                be_name: "alt".to_string(),
                 force: false,
             },
             client,
@@ -814,7 +878,7 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         let client2 = EmulatorClient::sampled();
         let result = execute_command(
             &Commands::Unmount {
-                target: "non-existent".to_string(),
+                be_name: "non-existent".to_string(),
                 force: false,
             },
             client2,

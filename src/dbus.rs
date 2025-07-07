@@ -131,8 +131,8 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn unmount(&self, target: &str, force: bool) -> Result<Option<PathBuf>, BeError> {
-        let guid = self.get_be_guid(target)?;
+    fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, BeError> {
+        let guid = self.get_be_guid(be_name)?;
         let result: String = self
             .connection
             .call_method(

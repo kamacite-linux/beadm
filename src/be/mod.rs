@@ -183,7 +183,7 @@ pub trait Client: Send + Sync {
 
     fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), Error>;
 
-    fn unmount(&self, target: &str, force: bool) -> Result<Option<PathBuf>, Error>;
+    fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error>;
 
     fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error>;
 
