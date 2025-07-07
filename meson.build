@@ -18,8 +18,16 @@ prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
 dbus_service_dir = datadir / 'dbus-1' / 'system-services'
-# dbus_service_dir = datadir / 'dbus-1' / 'services'
-dbus_policy_dir = datadir / 'dbus-1' / 'system.d'
+
+# The dbus-daemon doesn't seem to be configured to look for policies in
+# /usr/local/share/dbus-1/system.d in distros I've tested, so only use
+# the datadir if we think it's actually going to work; otherwise use /etc.
+if prefix == '/usr'
+        dbus_policy_dir = datadir / 'dbus-1' / 'system.d'
+else
+        dbus_policy_dir = '/' / get_option('sysconfdir') / 'dbus-1' / 'system.d'
+endif
+
 # polkit_actions_dir = datadir / 'polkit-1' / 'actions'
 
 summary({
@@ -27,6 +35,7 @@ summary({
         'bindir' : bindir,
         'datadir' : datadir,
         'dbus' : dbus_service_dir,
+        'dbus policy' : dbus_policy_dir,
         'opt': get_option('optimization'),
         'debug': get_option('debug'),
         'buildtype': get_option('buildtype'),
