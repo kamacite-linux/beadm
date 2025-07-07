@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 use super::validation::{validate_be_name, validate_component};
-use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
+use super::{BootEnvironment, Client, Error, MountMode, Snapshot, generate_snapshot_name};
 
 /// A boot environment client populated with static data that operates
 /// entirely in-memory with no side effects.
@@ -402,6 +402,54 @@ impl Client for EmulatorClient {
             });
         }
         Ok(sample_snapshots(be_name))
+    }
+
+    fn snapshot(&self, source: Option<&str>, _description: Option<&str>) -> Result<String, Error> {
+        let (be_name, snapshot_name) = match source {
+            Some(src) => {
+                if src.contains('@') {
+                    // Form: NAME@SNAPSHOT
+                    let parts: Vec<&str> = src.split('@').collect();
+                    if parts.len() != 2 {
+                        return Err(Error::InvalidName {
+                            name: src.to_string(),
+                            reason: "too many '@' characters".to_string(),
+                        });
+                    }
+                    (parts[0].to_string(), Some(parts[1].to_string()))
+                } else {
+                    // Form: NAME (snapshot name will be auto-generated)
+                    (src.to_string(), None)
+                }
+            }
+            None => {
+                // Form: beadm snapshot (snapshot active BE with auto-generated name)
+                let bes = self.bes.read().unwrap();
+                let active_be = bes
+                    .iter()
+                    .find(|be| be.active)
+                    .ok_or_else(|| Error::ZfsError {
+                        message: "No active boot environment found".to_string(),
+                    })?;
+                (active_be.name.clone(), None)
+            }
+        };
+
+        // Ensure the boot environment exists
+        if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
+            return Err(Error::not_found(&be_name));
+        }
+
+        let snapshot_name = match snapshot_name {
+            Some(name) => name,
+            // Same format as the libzfs client.
+            None => generate_snapshot_name(),
+        };
+
+        // In a real implementation, we would add the snapshot to storage with the
+        // description, but for the mock client we just validate and return the name.
+        // The description parameter is accepted but ignored in the mock.
+        Ok(format!("{}@{}", be_name, snapshot_name))
     }
 }
 

@@ -200,4 +200,22 @@ pub trait Client: Send + Sync {
 
     /// Get snapshots for a specific boot environment.
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error>;
+
+    /// Create a snapshot of a boot environment.
+    ///
+    /// The source can be:
+    /// - None: Snapshot the active boot environment with auto-generated name.
+    /// - Some("NAME"): Snapshot the specified BE with auto-generated name.
+    /// - Some("NAME@SNAPSHOT"): Snapshot the specified BE with custom name.
+    ///
+    /// Returns the final snapshot name (e.g. `be@snapshot`).
+    fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, Error>;
+}
+
+/// Generate a snapshot name based on the current time.
+///
+/// This is similar to the behaviour of FreeBSD's `bectl create` command.
+pub(crate) fn generate_snapshot_name() -> String {
+    // Currently an RFC 3339-style timestamp.
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }

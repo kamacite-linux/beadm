@@ -271,6 +271,23 @@ impl Client for ClientProxy {
 
         Ok(snapshots)
     }
+
+    fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, BeError> {
+        let src = source.unwrap_or("");
+        let desc = description.unwrap_or("");
+        let result: String = self
+            .connection
+            .call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
+                "snapshot",
+                &(src, desc),
+            )?
+            .body()
+            .deserialize()?;
+        Ok(result)
+    }
 }
 
 // ============================================================================
@@ -511,6 +528,18 @@ impl BootEnvironmentObject {
         let hostid = self.client.hostid(&self.data.read().unwrap().name)?;
         Ok(hostid.unwrap_or(0))
     }
+
+    /// Create a snapshot of this boot environment
+    fn snapshot(&self, snapshot_name: &str) -> zbus::fdo::Result<String> {
+        let be_name = &self.data.read().unwrap().name;
+        let target = if snapshot_name.is_empty() {
+            be_name.clone()
+        } else {
+            format!("{}@{}", be_name, snapshot_name)
+        };
+        let result = self.client.snapshot(Some(&target), None)?;
+        Ok(result)
+    }
 }
 
 /// Main beadm manager implementing ObjectManager
@@ -669,6 +698,22 @@ impl BeadmManager {
             .ok_or_else(|| BeError::not_found(name))?;
 
         Ok(be_object_path(guid))
+    }
+
+    /// Create a snapshot of a boot environment
+    fn snapshot(&self, target: &str, description: &str) -> zbus::fdo::Result<String> {
+        let target_opt = if target.is_empty() {
+            None
+        } else {
+            Some(target)
+        };
+        let desc_opt = if description.is_empty() {
+            None
+        } else {
+            Some(description)
+        };
+        let result = self.client.snapshot(target_opt, desc_opt)?;
+        Ok(result)
     }
 }
 

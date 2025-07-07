@@ -6,10 +6,8 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
-use chrono;
-
 use super::validation::{validate_component, validate_dataset_name};
-use super::{BootEnvironment, Client, Error, MountMode, Snapshot};
+use super::{BootEnvironment, Client, Error, MountMode, Snapshot, generate_snapshot_name};
 
 const DESCRIPTION_PROP: &str = "ca.kamacite:description";
 
@@ -102,8 +100,7 @@ impl Client for LibZfsClient {
                 }
 
                 // Build the full snapshot path (which handles validation).
-                let source_path = self.root.append(parts[0])?;
-                let snapshot_path = source_path.snapshot(parts[1])?;
+                let snapshot_path = self.root.append(parts[0])?.snapshot(parts[1])?;
 
                 // Open the snapshot (which also verifies it exists).
                 Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
@@ -117,12 +114,7 @@ impl Client for LibZfsClient {
             Some(src) => {
                 // Case #2: beadm create -e EXISTING NAME, which creates the
                 // clone from a new snapshot of a source boot environment.
-                let source_path = self.root.append(src)?;
-
-                // Generate a timestamp-based snapshot name, much like FreeBSD
-                // does for `bectl create`.
-                let snapshot_name = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                let snapshot_path = source_path.snapshot(&snapshot_name)?;
+                let snapshot_path = self.root.append(src)?.generate_snapshot()?;
 
                 Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
                     // Special casing for EZFS_NOENT.
@@ -135,14 +127,11 @@ impl Client for LibZfsClient {
             None => {
                 // Case #3: beadm create NAME, which creates the clone from a
                 // snapshot of the active boot environment.
-                let source_path = get_rootfs()?.ok_or_else(|| Error::ZfsError {
-                    message: "Not running on ZFS root".to_string(),
-                })?;
-
-                // Generate a timestamp-based snapshot name, much like FreeBSD
-                // does for `bectl create`.
-                let snapshot_name = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                let snapshot_path = source_path.snapshot(&snapshot_name)?;
+                let snapshot_path = get_rootfs()?
+                    .ok_or_else(|| Error::ZfsError {
+                        message: "Not running on ZFS root".to_string(),
+                    })?
+                    .generate_snapshot()?;
 
                 Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref())
             }
@@ -386,6 +375,47 @@ impl Client for LibZfsClient {
             Ok(())
         })?;
         Ok(snapshots)
+    }
+
+    fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, Error> {
+        let snapshot_path = match source {
+            Some(src) if src.contains('@') => {
+                let parts: Vec<&str> = src.split('@').collect();
+                if parts.len() != 2 {
+                    return Err(Error::InvalidName {
+                        name: src.to_string(),
+                        reason: "too many '@' characters".to_string(),
+                    });
+                }
+
+                // Build the full snapshot path (which handles validation).
+                self.root.append(parts[0])?.snapshot(parts[1])
+            }
+            Some(src) => self.root.append(src)?.generate_snapshot(),
+            None => get_rootfs()?
+                .ok_or_else(|| Error::ZfsError {
+                    message: "Not running on ZFS root".to_string(),
+                })?
+                .generate_snapshot(),
+        }?;
+
+        // Pass the description (if provided) as a snapshot property.
+        let props = if let Some(desc) = description {
+            Some(NvList::from(&[(DESCRIPTION_PROP, desc)])?)
+        } else {
+            None
+        };
+
+        let lzh = LibHandle::get();
+        Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
+            // Special casing for EZFS_NOENT.
+            if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                return Error::not_found(&snapshot_path.basename());
+            }
+            err
+        })?;
+
+        Ok(snapshot_path.basename())
     }
 }
 
@@ -892,6 +922,12 @@ impl DatasetName {
         // We know all components are valid at this point, it is safe to skip
         // UTF-8 and nul-byte checks.
         unsafe { Self::from_vec_unchecked(v) }
+    }
+
+    /// Generate a snapshot with an auto-generated timestamp-based name.
+    pub fn generate_snapshot(&self) -> Result<Self, Error> {
+        let snapshot_name = generate_snapshot_name();
+        self.snapshot(&snapshot_name)
     }
 
     // Create a dataset name from a byte vector that is known to be (1) UTF-8;

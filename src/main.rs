@@ -149,6 +149,16 @@ enum Commands {
         /// Boot environment name
         be_name: String,
     },
+    /// Create a snapshot of a boot environment
+    Snapshot {
+        /// Boot environment name and optional snapshot name (NAME or NAME@SNAPSHOT)
+        /// If no NAME is provided, snapshots the active boot environment
+        /// If no @SNAPSHOT is provided, generates a timestamp-based name
+        source: Option<String>,
+        /// Description for the snapshot
+        #[arg(short = 'd', long)]
+        description: Option<String>,
+    },
     /// Start the boot environment D-Bus server
     Serve {
         /// Run on the session bus instead of the system bus
@@ -508,6 +518,14 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                     std::process::exit(1);
                 }
             }
+            Ok(())
+        }
+        Commands::Snapshot {
+            source,
+            description,
+        } => {
+            let snapshot_name = client.snapshot(source.as_deref(), description.as_deref())?;
+            println!("Created snapshot: {}", snapshot_name);
             Ok(())
         }
         Commands::Serve { user } => {
