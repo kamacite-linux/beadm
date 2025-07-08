@@ -10,6 +10,7 @@ use super::validation::{validate_component, validate_dataset_name};
 use super::{BootEnvironment, Client, Error, MountMode, Snapshot, generate_snapshot_name};
 
 const DESCRIPTION_PROP: &str = "ca.kamacite:description";
+const PREVIOUS_BOOTFS_PROP: &str = "ca.kamacite:previous-bootfs";
 
 /// A ZFS boot environment client backed by libzfs.
 pub struct LibZfsClient {
@@ -65,6 +66,13 @@ impl LibZfsClient {
     fn get_next_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
         let zpool = Zpool::open(lzh, &self.root.pool())?;
         Ok(zpool.get_bootfs())
+    }
+
+    /// Get the filesystem (if any) that was previously active on next boot for
+    /// the pool backing the boot environment root.
+    fn get_previous_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
+        let zpool = Zpool::open(lzh, &self.root.pool())?;
+        Ok(zpool.get_previous_bootfs())
     }
 }
 
@@ -191,7 +199,7 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
 
-        // Cannot destroy the active or next boot environment.
+        // Cannot destroy the active, next, or boot once boot environment.
         if let Some(rootfs) = get_rootfs()? {
             if be_path == rootfs {
                 return Err(Error::CannotDestroyActive {
@@ -200,6 +208,13 @@ impl Client for LibZfsClient {
             }
         }
         if let Some(bootfs) = self.get_next_boot(&lzh)? {
+            if be_path == bootfs {
+                return Err(Error::CannotDestroyActive {
+                    name: be_name.to_string(),
+                });
+            }
+        }
+        if let Some(bootfs) = self.get_previous_boot(&lzh)? {
             if be_path == bootfs {
                 return Err(Error::CannotDestroyActive {
                     name: be_name.to_string(),
@@ -290,24 +305,25 @@ impl Client for LibZfsClient {
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
-        // Return error for temporary activation as it's not implemented yet.
-        if temporary {
-            return Err(Error::ZfsError {
-                message: "Temporary activation is not implemented".to_string(),
-            });
-        }
-
         let dataset = self.root.append(be_name)?;
         let lzh = LibHandle::get();
         Dataset::boot_environment(&lzh, be_name, &dataset)?; // Check existence.
         let zpool = Zpool::open(&lzh, &self.root.pool())?;
-        zpool.set_bootfs(&lzh, &dataset)
-    }
 
-    fn deactivate(&self, _be_name: &str) -> Result<(), Error> {
-        Err(Error::ZfsError {
-            message: "Temporary activation is not implemented".to_string(),
-        })
+        if temporary {
+            // For temporary activation, (1) copy the current `bootfs` into the
+            // `previous-bootfs` property; and then (2) write the new `bootfs`
+            // value.
+            let current_bootfs = zpool.get_bootfs().ok_or_else(|| Error::ZfsError {
+                message: "No current bootfs set on pool".to_string(),
+            })?;
+            zpool.set_previous_bootfs(&lzh, &current_bootfs)?;
+            zpool.set_bootfs(&lzh, &dataset)
+        } else {
+            zpool.set_bootfs(&lzh, &dataset)?;
+            // Ensure we unset any temporary activations, too.
+            zpool.clear_previous_bootfs(&lzh)
+        }
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error> {
@@ -333,6 +349,7 @@ impl Client for LibZfsClient {
         let root_dataset = Dataset::filesystem(&lzh, &self.root)?;
         let rootfs = get_rootfs()?;
         let bootfs = self.get_next_boot(&lzh)?;
+        let previous_bootfs = self.get_previous_boot(&lzh)?;
         let mut bes = Vec::new();
         root_dataset.iter_children(|dataset| {
             let path = match dataset.get_name() {
@@ -340,7 +357,19 @@ impl Client for LibZfsClient {
                 None => return Ok(()), // Skip this iteration
             };
             let active = rootfs.as_ref().map_or(false, |fs| *fs == path);
-            let next_boot = bootfs.as_ref().map_or(false, |fs| *fs == path);
+            let next_boot = if let Some(prev) = previous_bootfs.as_ref() {
+                // There is a temporary activation.
+                *prev == path
+            } else {
+                // There is no temporary activation.
+                bootfs.as_ref().map_or(false, |fs| *fs == path)
+            };
+            let boot_once = if previous_bootfs.is_some() {
+                bootfs.as_ref().map_or(false, |fs| *fs == path)
+            } else {
+                false
+            };
+
             bes.push(BootEnvironment {
                 name: path.basename(),
                 path: path.to_string(),
@@ -349,7 +378,7 @@ impl Client for LibZfsClient {
                 mountpoint: dataset.get_mountpoint(),
                 active,
                 next_boot,
-                boot_once: false, // TODO: Read from boot configuration
+                boot_once,
                 space: dataset.get_used_space(),
                 created: dataset.get_creation_time(),
             });
@@ -416,6 +445,22 @@ impl Client for LibZfsClient {
         })?;
 
         Ok(snapshot_path.basename())
+    }
+
+    fn clear_boot_once(&self) -> Result<(), Error> {
+        let lzh = LibHandle::get();
+        let zpool = Zpool::open(&lzh, &self.root.pool())?;
+
+        // Get the previous bootfs value
+        let previous_bootfs = zpool.get_previous_bootfs().ok_or_else(|| Error::ZfsError {
+            message: "No temporary boot environment is active".to_string(),
+        })?;
+
+        // Set the bootfs back to the previous value.
+        zpool.set_bootfs(&lzh, &previous_bootfs)?;
+
+        // Clear the temporary activation.
+        zpool.clear_previous_bootfs(&lzh)
     }
 }
 
@@ -871,6 +916,62 @@ impl Zpool {
     pub fn set_bootfs(&self, lzh: &LibHandle, dataset: &DatasetName) -> Result<(), Error> {
         let prop = CString::new("bootfs").unwrap();
         let result = unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), dataset.as_ptr()) };
+        if result != 0 {
+            Err(lzh.libzfs_error().into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Get the "previous bootfs" property (used for temporary activation).
+    pub fn get_previous_bootfs(&self) -> Option<DatasetName> {
+        let prop = CString::new(PREVIOUS_BOOTFS_PROP).unwrap();
+        const PROP_BUF_SIZE: usize = 1024;
+        let mut buf = vec![0u8; PROP_BUF_SIZE];
+        let result = unsafe {
+            ffi::zpool_get_userprop(
+                self.handle,
+                prop.as_ptr(),
+                buf.as_mut_ptr() as *mut std::os::raw::c_char,
+                PROP_BUF_SIZE,
+                ptr::null_mut(), // Don't need source info
+            )
+        };
+        if result == 0 {
+            if let Some(null_pos) = buf.iter().position(|&x| x == 0) {
+                buf.truncate(null_pos);
+            }
+            if let Ok(value) = String::from_utf8(buf) {
+                if !value.is_empty() && value != "-" {
+                    DatasetName::new(&value).ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Set the "previous bootfs" property (used for temporary activation).
+    pub fn set_previous_bootfs(&self, lzh: &LibHandle, dataset: &DatasetName) -> Result<(), Error> {
+        let prop = CString::new(PREVIOUS_BOOTFS_PROP).unwrap();
+        let result = unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), dataset.as_ptr()) };
+        if result != 0 {
+            Err(lzh.libzfs_error().into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Clear the "previous bootfs" property (used for temporary activation).
+    pub fn clear_previous_bootfs(&self, lzh: &LibHandle) -> Result<(), Error> {
+        let prop = CString::new(PREVIOUS_BOOTFS_PROP).unwrap();
+        let empty_value = CString::new("").unwrap();
+        let result =
+            unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), empty_value.as_ptr()) };
         if result != 0 {
             Err(lzh.libzfs_error().into())
         } else {
@@ -1526,6 +1627,13 @@ mod ffi {
             zhp: *mut ZpoolHandle,
             prop: *const c_char,
             value: *const c_char,
+        ) -> c_int;
+        pub fn zpool_get_userprop(
+            zhp: *mut ZpoolHandle,
+            prop: *const c_char,
+            buf: *mut c_char,
+            len: usize,
+            source: *mut c_int,
         ) -> c_int;
     }
 }

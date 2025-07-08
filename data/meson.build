@@ -9,6 +9,14 @@ if get_option('systemd').allowed()
 
         install_data(systemd_service, install_dir : unit_dir)
 
+        # "Clear boot once" oneshot service
+        clear_boot_once_service = configure_file(
+                configuration : conf,
+                input : 'beadm-clear-boot-once.service.in',
+                output : '@BASENAME@')
+
+        install_data(clear_boot_once_service, install_dir : unit_dir)
+
         # systemd-specific D-Bus service
         dbus_service = configure_file(
                 configuration : conf,

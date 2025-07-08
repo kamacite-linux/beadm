@@ -191,7 +191,8 @@ pub trait Client: Send + Sync {
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error>;
 
-    fn deactivate(&self, be_name: &str) -> Result<(), Error>;
+    /// Clear temporary boot environment activation.
+    fn clear_boot_once(&self) -> Result<(), Error>;
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error>;
 

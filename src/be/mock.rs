@@ -368,17 +368,27 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn deactivate(&self, be_name: &str) -> Result<(), Error> {
+    fn clear_boot_once(&self) -> Result<(), Error> {
         let mut bes = self.bes.write().unwrap();
-        let target_index = match bes.iter().position(|be| be.name == be_name) {
-            Some(index) => index,
-            None => {
-                return Err(Error::NotFound {
-                    name: be_name.to_string(),
-                });
-            }
-        };
-        bes[target_index].boot_once = false;
+
+        let temporary_be_index = bes.iter().position(|be| be.boot_once);
+        if temporary_be_index.is_none() {
+            return Err(Error::ZfsError {
+                message: "No temporary boot environment is active".to_string(),
+            });
+        }
+
+        if let Some(index) = temporary_be_index {
+            bes[index].boot_once = false;
+        }
+
+        // Since the mock doesn't store the previously-activated boot
+        // environment explicitly, we simulate the restoration by finding the
+        // *active* boot environment and setting that as next_boot.
+        if let Some(active_index) = bes.iter().position(|be| be.active) {
+            bes[active_index].next_boot = true;
+        }
+
         Ok(())
     }
 
@@ -1092,114 +1102,6 @@ mod tests {
     }
 
     #[test]
-    fn test_emulated_deactivate() {
-        let be1 = BootEnvironment {
-            name: "be1".to_string(),
-            path: "zfake/ROOT/be1".to_string(),
-            guid: EmulatorClient::generate_guid("be1"),
-            description: None,
-            mountpoint: None,
-            active: true,
-            next_boot: false,
-            boot_once: false,
-            space: 8192,
-            created: 1623301740,
-        };
-
-        let be2 = BootEnvironment {
-            name: "be2".to_string(),
-            path: "zfake/ROOT/be2".to_string(),
-            guid: EmulatorClient::generate_guid("be2"),
-            description: None,
-            mountpoint: None,
-            active: false,
-            next_boot: false,
-            boot_once: false,
-            space: 8192,
-            created: 1623305460,
-        };
-
-        let client = EmulatorClient::new(vec![be1, be2]);
-
-        // Remove temporary activation from be2
-        let result = client.deactivate("be2");
-        assert!(result.is_ok());
-
-        // Verify temp activation removed
-        let bes = client.get_boot_environments().unwrap();
-        assert!(!bes[1].boot_once); // be2 should no longer have boot_once
-    }
-
-    #[test]
-    fn test_emulated_deactivate_no_temp() {
-        // Test deactivate when the specified boot environment doesn't have boot_once set
-        let client = EmulatorClient::sampled();
-        let result = client.deactivate("default");
-        assert!(result.is_ok());
-
-        // Verify the default BE still doesn't have boot_once set
-        let bes = client.get_boot_environments().unwrap();
-        let default_be = bes.iter().find(|be| be.name == "default").unwrap();
-        assert!(!default_be.boot_once);
-    }
-
-    #[test]
-    fn test_emulated_deactivate_not_found() {
-        let client = EmulatorClient::sampled();
-        let result = client.deactivate("nonexistent");
-        assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
-    }
-
-    #[test]
-    fn test_emulated_deactivate_specific_be() {
-        // Test that deactivate only affects the specified boot environment
-        let be1 = BootEnvironment {
-            name: "be1".to_string(),
-            path: "zfake/ROOT/be1".to_string(),
-            guid: EmulatorClient::generate_guid("be1"),
-            description: None,
-            mountpoint: None,
-            active: false,
-            next_boot: false,
-            boot_once: false,
-            space: 8192,
-            created: 1623301740,
-        };
-
-        let be2 = BootEnvironment {
-            name: "be2".to_string(),
-            path: "zfake/ROOT/be2".to_string(),
-            guid: EmulatorClient::generate_guid("be2"),
-            description: None,
-            mountpoint: None,
-            active: false,
-            next_boot: false,
-            boot_once: false,
-            space: 8192,
-            created: 1623305460,
-        };
-
-        let client = EmulatorClient::new(vec![be1, be2]);
-
-        // First, temporarily activate be2
-        client.activate("be2", true).unwrap();
-
-        // Verify be2 is temporarily activated
-        let bes = client.get_boot_environments().unwrap();
-        assert!(!bes[0].boot_once); // be1 should not have boot_once
-        assert!(bes[1].boot_once); // be2 should have boot_once
-
-        // Now deactivate be2
-        let result = client.deactivate("be2");
-        assert!(result.is_ok());
-
-        // Verify be2's boot_once flag was cleared
-        let bes = client.get_boot_environments().unwrap();
-        assert!(!bes[0].boot_once); // be1 should still not have boot_once
-        assert!(!bes[1].boot_once); // be2 should no longer have boot_once
-    }
-
-    #[test]
     fn test_emulated_activate_mutual_exclusivity() {
         // Test that only one BE can have next_boot=true and only one can have boot_once=true
         let be1 = BootEnvironment {
@@ -1483,5 +1385,169 @@ mod tests {
         // Try to create from snapshot with space in snapshot name
         let result = client.create("new-be", None, Some("default@invalid snap"), &[]);
         assert!(matches!(result, Err(Error::InvalidName { .. })));
+    }
+
+    #[test]
+    fn test_emulated_clear_boot_once_success() {
+        let be1 = BootEnvironment {
+            name: "be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
+            description: None,
+            mountpoint: None,
+            active: true, // This is the currently active BE
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let be2 = BootEnvironment {
+            name: "be2".to_string(),
+            path: "zfake/ROOT/be2".to_string(),
+            guid: EmulatorClient::generate_guid("be2"),
+            description: None,
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623305460,
+        };
+
+        let client = EmulatorClient::new(vec![be1, be2]);
+
+        // First, activate be2 temporarily
+        client.activate("be2", true).unwrap();
+
+        // Verify be2 is temporarily activated
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].boot_once); // be1 should not have boot_once
+        assert!(!bes[0].next_boot); // be1 should not have next_boot (cleared by temporary activation)
+        assert!(bes[1].boot_once); // be2 should have boot_once
+
+        // Now clear the temporary activation
+        let result = client.clear_boot_once();
+        assert!(result.is_ok());
+
+        // Verify the state is restored
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].boot_once); // be1 should not have boot_once
+        assert!(bes[0].next_boot); // be1 should be restored as next_boot (it was active)
+        assert!(!bes[1].boot_once); // be2 should no longer have boot_once
+        assert!(!bes[1].next_boot); // be2 should not have next_boot
+    }
+
+    #[test]
+    fn test_emulated_clear_boot_once_no_temporary() {
+        // Test clear_boot_once when no temporary boot environment is active
+        let client = EmulatorClient::sampled();
+
+        // Verify no temporary activation is set
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes.iter().any(|be| be.boot_once));
+
+        // Try to clear nextboot when no temporary activation exists
+        let result = client.clear_boot_once();
+        assert!(matches!(result, Err(Error::ZfsError { .. })));
+    }
+
+    #[test]
+    fn test_emulated_clear_boot_once_no_active() {
+        // Test clear_boot_once when there's a temporary BE but no active BE
+        let be1 = BootEnvironment {
+            name: "be1".to_string(),
+            path: "zfake/ROOT/be1".to_string(),
+            guid: EmulatorClient::generate_guid("be1"),
+            description: None,
+            mountpoint: None,
+            active: false, // No active BE
+            next_boot: false,
+            boot_once: true, // Temporary activation
+            space: 8192,
+            created: 1623301740,
+        };
+
+        let client = EmulatorClient::new(vec![be1]);
+
+        // Clear nextboot should work even when there's no active BE
+        let result = client.clear_boot_once();
+        assert!(result.is_ok());
+
+        // Verify temporary activation was cleared
+        let bes = client.get_boot_environments().unwrap();
+        assert!(!bes[0].boot_once); // boot_once should be cleared
+        assert!(!bes[0].next_boot); // next_boot should remain false (no active BE to restore)
+    }
+
+    #[test]
+    fn test_emulated_clear_boot_once_integration() {
+        // Complete integration test showing the full temporary activation/clear cycle
+        let active_be = BootEnvironment {
+            name: "current".to_string(),
+            path: "zfake/ROOT/current".to_string(),
+            guid: EmulatorClient::generate_guid("current"),
+            description: Some("Currently active BE".to_string()),
+            mountpoint: Some(PathBuf::from("/")),
+            active: true,    // This is the current active BE
+            next_boot: true, // Initially set as next boot
+            boot_once: false,
+            space: 950_000_000,
+            created: 1623301740,
+        };
+
+        let temp_be = BootEnvironment {
+            name: "temporary".to_string(),
+            path: "zfake/ROOT/temporary".to_string(),
+            guid: EmulatorClient::generate_guid("temporary"),
+            description: Some("For temporary testing".to_string()),
+            mountpoint: None,
+            active: false,
+            next_boot: false,
+            boot_once: false,
+            space: 8192,
+            created: 1623305460,
+        };
+
+        let client = EmulatorClient::new(vec![active_be, temp_be]);
+
+        // Verify initial state
+        let bes = client.get_boot_environments().unwrap();
+        assert!(
+            bes.iter()
+                .any(|be| be.name == "current" && be.active && be.next_boot)
+        );
+        assert!(bes.iter().any(|be| be.name == "temporary" && !be.boot_once));
+
+        // Activate temporary BE temporarily
+        client.activate("temporary", true).unwrap();
+
+        // Verify temporary activation
+        let bes = client.get_boot_environments().unwrap();
+        let current = bes.iter().find(|be| be.name == "current").unwrap();
+        let temporary = bes.iter().find(|be| be.name == "temporary").unwrap();
+
+        assert!(current.active); // Still the active BE
+        assert!(!current.next_boot); // No longer next_boot (cleared by temporary activation)
+        assert!(!current.boot_once); // Not temporarily activated
+        assert!(!temporary.active); // Not the active BE
+        assert!(!temporary.next_boot); // Not permanently activated
+        assert!(temporary.boot_once); // Temporarily activated
+
+        // Clear the temporary activation
+        let result = client.clear_boot_once();
+        assert!(result.is_ok());
+
+        // Verify the state is restored
+        let bes = client.get_boot_environments().unwrap();
+        let current = bes.iter().find(|be| be.name == "current").unwrap();
+        let temporary = bes.iter().find(|be| be.name == "temporary").unwrap();
+
+        assert!(current.active); // Still the active BE
+        assert!(current.next_boot); // Restored as next_boot
+        assert!(!current.boot_once); // Not temporarily activated
+        assert!(!temporary.active); // Not the active BE
+        assert!(!temporary.next_boot); // Not permanently activated
+        assert!(!temporary.boot_once); // Temporary activation cleared
     }
 }

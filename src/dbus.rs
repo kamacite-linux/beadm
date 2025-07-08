@@ -197,13 +197,12 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn deactivate(&self, be_name: &str) -> Result<(), BeError> {
-        let guid = self.get_be_guid(be_name)?;
+    fn clear_boot_once(&self) -> Result<(), BeError> {
         self.connection.call_method(
             Some(SERVICE_NAME),
-            &be_object_path(guid),
-            Some(BOOT_ENV_INTERFACE),
-            "deactivate",
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "clear_boot_once",
             &(),
         )?;
         Ok(())
@@ -501,12 +500,6 @@ impl BootEnvironmentObject {
         Ok(())
     }
 
-    /// Deactivate this boot environment
-    fn deactivate(&self) -> zbus::fdo::Result<()> {
-        self.client.deactivate(&self.data.read().unwrap().name)?;
-        Ok(())
-    }
-
     /// Rollback to a snapshot
     fn rollback(&self, snapshot: &str) -> zbus::fdo::Result<()> {
         self.client
@@ -698,6 +691,12 @@ impl BeadmManager {
             .ok_or_else(|| BeError::not_found(name))?;
 
         Ok(be_object_path(guid))
+    }
+
+    /// Clear temporary boot environment activation.
+    fn clear_boot_once(&self) -> zbus::fdo::Result<()> {
+        self.client.clear_boot_once()?;
+        Ok(())
     }
 
     /// Create a snapshot of a boot environment

@@ -44,7 +44,8 @@ enum Commands {
     /// Mark a boot environment as the default root filesystem.
     Activate {
         /// The boot environment to activate.
-        be_name: String,
+        #[arg(required_unless_present = "deactivate")]
+        be_name: Option<String>,
 
         /// Activate the boot environment only for the next boot.
         #[arg(short = 't', conflicts_with = "deactivate")]
@@ -556,9 +557,11 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             deactivate,
         } => {
             if *deactivate {
-                client.deactivate(be_name)?;
-                println!("Removed temporary activation for '{}'.", be_name);
+                client.clear_boot_once()?;
+                println!("Removed temporary boot environment activation.");
             } else {
+                // SAFETY: Safe due to required_unless_present.
+                let be_name = be_name.as_ref().unwrap();
                 client.activate(be_name, *temporary)?;
                 println!(
                     "Activated '{}'{}.",

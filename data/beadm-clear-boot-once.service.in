@@ -1,0 +1,13 @@
+[Unit]
+Description=Clear temporary boot environment activations
+Requires=zfs.target
+After=zfs.target
+ConditionPathExists=/dev/zfs
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@bindir@/beadm activate -T
+
+[Install]
+WantedBy=multi-user.target
