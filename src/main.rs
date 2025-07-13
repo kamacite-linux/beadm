@@ -208,6 +208,11 @@ enum Commands {
         /// The boot environment.
         be_name: String,
     },
+    /// Create the ZFS dataset layout for boot environments.
+    Init {
+        /// The ZFS pool to target.
+        pool: String,
+    },
     /// Start the boot environment D-Bus server.
     Serve {
         /// Run on the session bus instead of the system bus.
@@ -593,6 +598,11 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         } => {
             let snapshot_name = client.snapshot(source.as_deref(), description.as_deref())?;
             println!("Created '{}'.", snapshot_name);
+            Ok(())
+        }
+        Commands::Init { pool } => {
+            client.init(pool)?;
+            println!("Boot environment dataset layout initialized.");
             Ok(())
         }
         Commands::Serve { user } => {

@@ -287,6 +287,21 @@ impl Client for ClientProxy {
             .deserialize()?;
         Ok(result)
     }
+
+    fn init(&self, pool: &str) -> Result<(), BeError> {
+        let _result: () = self
+            .connection
+            .call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
+                "init",
+                &(pool,),
+            )?
+            .body()
+            .deserialize()?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -713,6 +728,12 @@ impl BeadmManager {
         };
         let result = self.client.snapshot(target_opt, desc_opt)?;
         Ok(result)
+    }
+
+    /// Create the ZFS dataset layout for boot environments.
+    fn init(&self, pool: &str) -> zbus::fdo::Result<()> {
+        self.client.init(pool)?;
+        Ok(())
     }
 }
 

@@ -462,6 +462,62 @@ impl Client for LibZfsClient {
         // Clear the temporary activation.
         zpool.clear_previous_bootfs(&lzh)
     }
+
+    fn init(&self, pool: &str) -> Result<(), Error> {
+        let lzh = LibHandle::get();
+        let pool_dataset = DatasetName::new(pool)?;
+        let _ = Zpool::open(&lzh, &pool_dataset)?; // Ensure the pool exists.
+
+        // Initialize the ROOT dataset to hold boot environments.
+        let root_dataset = pool_dataset.append("ROOT").unwrap();
+        match Dataset::filesystem(&lzh, &root_dataset) {
+            Ok(dataset) => {
+                // Verify that mountpoint=none.
+                if let Some(mountpoint) = dataset.get_mountpoint_property() {
+                    if mountpoint != "none" {
+                        return Err(Error::ZfsError {
+                            message: format!(
+                                "Dataset {}/ROOT exists but has wrong mountpoint '{}' (expected 'none')",
+                                pool, mountpoint
+                            ),
+                        });
+                    }
+                }
+            }
+            Err(Error::LibzfsError(LibzfsError { errno: 2009, .. })) => {
+                // Create it.
+                let props = NvList::from(&[("mountpoint", "none")])?;
+                Dataset::create(&lzh, &root_dataset, &props)?;
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Initialize the home dataset to hold home directories.
+        let home_dataset = pool_dataset.append("home").unwrap();
+        match Dataset::filesystem(&lzh, &home_dataset) {
+            Ok(dataset) => {
+                // Verify that mountpoint=/home.
+                if let Some(mountpoint) = dataset.get_mountpoint_property() {
+                    if mountpoint != "/home" {
+                        return Err(Error::ZfsError {
+                            message: format!(
+                                "Dataset {}/home exists but has wrong mountpoint '{}' (expected '/home')",
+                                pool, mountpoint
+                            ),
+                        });
+                    }
+                }
+            }
+            Err(Error::LibzfsError(LibzfsError { errno: 2009, .. })) => {
+                // Create it.
+                let props = NvList::from(&[("mountpoint", "/home")])?;
+                Dataset::create(&lzh, &home_dataset, &props)?;
+            }
+            Err(e) => return Err(e),
+        }
+
+        Ok(())
+    }
 }
 
 /// Safe wrapper for various operations on a ZFS dataset handle.

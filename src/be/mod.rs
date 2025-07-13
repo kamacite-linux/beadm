@@ -211,6 +211,10 @@ pub trait Client: Send + Sync {
     ///
     /// Returns the final snapshot name (e.g. `be@snapshot`).
     fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, Error>;
+
+    /// Create the ZFS dataset layout for boot environments. It is not an error
+    /// if the required datasets already exist.
+    fn init(&self, pool: &str) -> Result<(), Error>;
 }
 
 /// Generate a snapshot name based on the current time.

@@ -461,6 +461,18 @@ impl Client for EmulatorClient {
         // The description parameter is accepted but ignored in the mock.
         Ok(format!("{}@{}", be_name, snapshot_name))
     }
+
+    fn init(&self, pool: &str) -> Result<(), Error> {
+        // For the mock implementation, we simply validate the pool name format
+        // and simulate success.
+        if pool.is_empty() || pool.contains('/') || pool.contains('@') {
+            return Err(Error::InvalidName {
+                name: pool.to_string(),
+                reason: "pool name cannot contain '/' or '@' characters or be empty".to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 fn sample_boot_environments() -> Vec<BootEnvironment> {
