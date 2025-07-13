@@ -17,29 +17,14 @@ systemd_dep = dependency('systemd', version : '>= 242', required : get_option('s
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
-dbus_service_dir = datadir / 'dbus-1' / 'system-services'
-
-# The dbus-daemon doesn't seem to be configured to look for policies in
-# /usr/local/share/dbus-1/system.d in distros I've tested, so only use
-# the datadir if we think it's actually going to work; otherwise use /etc.
-if prefix == '/usr'
-        dbus_policy_dir = datadir / 'dbus-1' / 'system.d'
-else
-        dbus_policy_dir = '/' / get_option('sysconfdir') / 'dbus-1' / 'system.d'
-endif
-
-# polkit_actions_dir = datadir / 'polkit-1' / 'actions'
 
 summary({
         'prefix' : prefix,
         'bindir' : bindir,
         'datadir' : datadir,
-        'dbus' : dbus_service_dir,
-        'dbus policy' : dbus_policy_dir,
         'opt': get_option('optimization'),
         'debug': get_option('debug'),
         'buildtype': get_option('buildtype'),
-        # 'polkit': polkit_actions_dir,
 })
 
 if get_option('systemd').allowed() and systemd_dep.found()
@@ -48,6 +33,27 @@ if get_option('systemd').allowed() and systemd_dep.found()
                 pkgconfig_define: ['prefix', prefix]
         )
         summary('unit', unit_dir)
+endif
+
+if get_option('dbus').allowed()
+        dbus_service_dir = datadir / 'dbus-1' / 'system-services'
+        # polkit_actions_dir = datadir / 'polkit-1' / 'actions'
+
+        # The dbus-daemon doesn't seem to be configured to look for policies in
+        # /usr/local/share/dbus-1/system.d in distros I've tested, so only use
+        # the datadir if we think it's actually going to work; otherwise use
+        # /etc.
+        if prefix == '/usr'
+                dbus_policy_dir = datadir / 'dbus-1' / 'system.d'
+        else
+                dbus_policy_dir = '/' / get_option('sysconfdir') / 'dbus-1' / 'system.d'
+        endif
+
+        summary({
+                'dbus' : dbus_service_dir,
+                'dbus policy' : dbus_policy_dir,
+                # 'polkit': polkit_actions_dir,
+        })
 endif
 
 # Configuration data -----------------------------------------------------------

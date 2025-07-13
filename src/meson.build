@@ -18,6 +18,11 @@ cargo_flags = [
         '--target-dir', target_dir,
 ]
 
+# Handle feature flags.
+if not get_option('dbus').allowed() or get_option('dbus').disabled()
+        cargo_flags += ['--no-default-features']
+endif
+
 # Partially translate meson's buildtype to cargo flags.
 profile = 'debug'
 if get_option('buildtype') == 'release'

@@ -1,6 +1,7 @@
 use clap::ValueEnum;
 use std::path::{Path, PathBuf};
 use thiserror::Error as ThisError;
+#[cfg(feature = "dbus")]
 use zvariant::{DeserializeDict, SerializeDict, Type};
 
 pub mod mock;
@@ -45,6 +46,7 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[cfg(feature = "dbus")]
     #[error("D-Bus error: {0}")]
     ZbusError(#[from] zbus::Error),
 
@@ -52,6 +54,7 @@ pub enum Error {
     OsReleasePrettyNameNotFound { path: String },
 }
 
+#[cfg(feature = "dbus")]
 impl From<Error> for zbus::fdo::Error {
     fn from(err: Error) -> Self {
         match err {
@@ -68,6 +71,7 @@ impl From<Error> for zbus::fdo::Error {
     }
 }
 
+#[cfg(feature = "dbus")]
 impl From<Error> for zbus::Error {
     fn from(err: Error) -> Self {
         zbus::Error::Failure(err.to_string())
@@ -120,8 +124,9 @@ pub enum MountMode {
     ReadOnly,
 }
 
-#[derive(Clone, Debug, PartialEq, SerializeDict, DeserializeDict, Type)]
-#[zvariant(signature = "a{sv}", rename_all = "PascalCase")]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "dbus", derive(SerializeDict, DeserializeDict, Type))]
+#[cfg_attr(feature = "dbus", zvariant(signature = "a{sv}", rename_all = "PascalCase"))]
 pub struct BootEnvironment {
     /// The name of this boot environment.
     pub name: String,

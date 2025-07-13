@@ -1,3 +1,4 @@
+#[cfg(feature = "dbus")]
 use async_io::block_on;
 use chrono::{Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -5,11 +6,13 @@ use std::fs;
 use std::path::PathBuf;
 
 mod be;
+#[cfg(feature = "dbus")]
 mod dbus;
 
 use be::mock::EmulatorClient;
 use be::zfs::{LibZfsClient, format_zfs_bytes};
 use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
+#[cfg(feature = "dbus")]
 use dbus::{ClientProxy, serve};
 
 #[derive(Parser)]
@@ -226,6 +229,7 @@ enum Commands {
         pool: String,
     },
     /// Start the boot environment D-Bus server.
+    #[cfg(feature = "dbus")]
     Serve {
         /// Run on the session bus instead of the system bus.
         #[arg(long)]
@@ -248,6 +252,7 @@ enum SortField {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum ClientType {
     /// Use the D-Bus client.
+    #[cfg(feature = "dbus")]
     #[value(name = "dbus")]
     DBus,
     /// Use LibZFS directly.
@@ -663,6 +668,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             println!("Boot environment dataset layout initialized.");
             Ok(())
         }
+        #[cfg(feature = "dbus")]
         Commands::Serve { user } => {
             serve(client, *user)?;
             Ok(())
@@ -678,6 +684,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let client = EmulatorClient::sampled();
             execute_command(&cli.command, client)?;
         }
+        #[cfg(feature = "dbus")]
         ClientType::DBus => {
             // Use the system bus by default.
             let connection = block_on(zbus::Connection::system())?;

@@ -4,3 +4,8 @@ option('systemd',
        type : 'feature',
        value : 'auto',
        description : 'Enable systemd support')
+
+option('dbus',
+       type : 'feature',
+       value : 'auto',
+       description : 'Enable D-Bus support')
