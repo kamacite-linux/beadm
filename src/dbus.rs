@@ -246,7 +246,7 @@ impl Client for ClientProxy {
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, BeError> {
         let guid = self.get_be_guid(be_name)?;
-        let snapshots_data: Vec<(String, String, u64, i64)> = self
+        let snapshots_data: Vec<(String, String, String, u64, i64)> = self
             .connection
             .call_method(
                 Some(SERVICE_NAME),
@@ -260,9 +260,14 @@ impl Client for ClientProxy {
 
         let snapshots = snapshots_data
             .into_iter()
-            .map(|(name, path, space, created)| Snapshot {
+            .map(|(name, path, description, space, created)| Snapshot {
                 name,
                 path,
+                description: if description.is_empty() {
+                    None
+                } else {
+                    Some(description)
+                },
                 space,
                 created,
             })
@@ -523,11 +528,19 @@ impl BootEnvironmentObject {
     }
 
     /// Get snapshots for this boot environment
-    fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, String, u64, i64)>> {
+    fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, String, String, u64, i64)>> {
         let snapshots = self.client.get_snapshots(&self.data.read().unwrap().name)?;
         Ok(snapshots
             .into_iter()
-            .map(|snap| (snap.name, snap.path, snap.space, snap.created))
+            .map(|snap| {
+                (
+                    snap.name,
+                    snap.path,
+                    snap.description.unwrap_or_default(),
+                    snap.space,
+                    snap.created,
+                )
+            })
             .collect())
     }
 

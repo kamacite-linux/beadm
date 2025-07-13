@@ -295,7 +295,7 @@ impl ListRow {
     fn description(&self) -> Option<&str> {
         match self {
             ListRow::BootEnvironment(be) => be.description.as_deref(),
-            ListRow::Snapshot(_) => None,
+            ListRow::Snapshot(snapshot) => snapshot.description.as_deref(),
         }
     }
 }

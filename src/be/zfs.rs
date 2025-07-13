@@ -397,6 +397,7 @@ impl Client for LibZfsClient {
                 snapshots.push(Snapshot {
                     name: path.basename(),
                     path: path.to_string(),
+                    description: snapshot.get_user_property(DESCRIPTION_PROP),
                     space: snapshot.get_used_space(),
                     created: snapshot.get_creation_time(),
                 });

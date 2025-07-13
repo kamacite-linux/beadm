@@ -510,12 +510,14 @@ fn sample_snapshots(be_name: &str) -> Vec<Snapshot> {
             Snapshot {
                 name: "default@2021-06-10-04:30".to_string(),
                 path: "zfake/ROOT/default@2021-06-10-04:30".to_string(),
+                description: Some("Automatic snapshot".to_string()),
                 space: 404_000,      // 404K
                 created: 1623303000, // 2021-06-10 04:30
             },
             Snapshot {
                 name: "default@2021-06-10-05:10".to_string(),
                 path: "zfake/ROOT/default@2021-06-10-05:10".to_string(),
+                description: None,
                 space: 404_000,      // 404K
                 created: 1623305400, // 2021-06-10 05:10
             },
@@ -523,6 +525,7 @@ fn sample_snapshots(be_name: &str) -> Vec<Snapshot> {
         "alt" => vec![Snapshot {
             name: "alt@backup".to_string(),
             path: "zfake/ROOT/alt@backup".to_string(),
+            description: Some("Manual backup".to_string()),
             space: 1024,         // 1K
             created: 1623306000, // 2021-06-10 05:06:40
         }],

@@ -150,6 +150,8 @@ pub struct Snapshot {
     /// The ZFS snapshot path (e.g., `zroot/ROOT/default@snapshot`).
     #[allow(dead_code)]
     pub path: String,
+    /// Optional description for this snapshot.
+    pub description: Option<String>,
     /// Bytes used by this snapshot.
     pub space: u64,
     /// Unix timestamp for when this snapshot was created.
