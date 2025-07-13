@@ -374,7 +374,7 @@ impl Client for LibZfsClient {
                 name: path.basename(),
                 path: path.to_string(),
                 guid: dataset.get_guid(),
-                description: None, // TODO: Read from user property
+                description: dataset.get_user_property(DESCRIPTION_PROP),
                 mountpoint: dataset.get_mountpoint(),
                 active,
                 next_boot,
@@ -892,6 +892,60 @@ impl Dataset {
             )
         };
         if result == 0 { Some(value) } else { None }
+    }
+
+    /// Get a specific ZFS user property for this dataset.
+    fn get_user_property(&self, prop_name: &str) -> Option<String> {
+        let prop_cstr = match CString::new(prop_name) {
+            Ok(cstr) => cstr,
+            Err(_) => return None,
+        };
+
+        let user_props = unsafe { ffi::zfs_get_user_props(self.handle) };
+        if user_props.is_null() {
+            // This should never happen.
+            return None;
+        }
+
+        // User properties are stored as an nvlist of nvlists.
+        let mut prop_nvlist_ptr: *mut ffi::NvList = ptr::null_mut();
+        let result = unsafe {
+            ffi::nvlist_lookup_nvlist(
+                user_props,
+                prop_cstr.as_ptr(),
+                &mut prop_nvlist_ptr as *mut *mut ffi::NvList,
+            )
+        };
+
+        if result != 0 || prop_nvlist_ptr.is_null() {
+            // No entry for this user property.
+            return None;
+        }
+
+        // The property is stored under the aptly-named "value" name.
+        let value_cstr = CString::new("value").unwrap();
+        let mut value_ptr: *mut std::os::raw::c_char = ptr::null_mut();
+        let result = unsafe {
+            ffi::nvlist_lookup_string(
+                prop_nvlist_ptr,
+                value_cstr.as_ptr(),
+                &mut value_ptr as *mut *mut std::os::raw::c_char,
+            )
+        };
+
+        if result != 0 || value_ptr.is_null() {
+            // This should never happen.
+            return None;
+        }
+
+        let cstr = unsafe { CStr::from_ptr(value_ptr) };
+        let value_str = cstr.to_string_lossy().to_string();
+        // TODO: Can this '-' ever be a legitimate value?
+        if !value_str.is_empty() && value_str != "-" {
+            Some(value_str)
+        } else {
+            None
+        }
     }
 
     /// Clone a dataset from an existing snapshot.
@@ -1655,6 +1709,7 @@ mod ffi {
             buf: *mut c_char,
             len: usize,
         ) -> c_int;
+        pub fn zfs_get_user_props(zhp: *mut ZfsHandle) -> *mut NvList;
 
         // Utility functions
         pub fn zfs_nicebytes(bytes: u64, buf: *mut c_char, len: usize);
@@ -1665,6 +1720,16 @@ mod ffi {
             nvl: *mut NvList,
             name: *const c_char,
             val: *const c_char,
+        ) -> c_int;
+        pub fn nvlist_lookup_string(
+            nvl: *mut NvList,
+            name: *const c_char,
+            val: *mut *mut c_char,
+        ) -> c_int;
+        pub fn nvlist_lookup_nvlist(
+            nvl: *mut NvList,
+            name: *const c_char,
+            val: *mut *mut NvList,
         ) -> c_int;
         pub fn nvlist_free(nvl: *mut NvList);
 
