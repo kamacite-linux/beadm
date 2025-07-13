@@ -165,7 +165,7 @@ impl Client for LibZfsClient {
             })
     }
 
-    fn new(
+    fn create_empty(
         &self,
         be_name: &str,
         description: Option<&str>,

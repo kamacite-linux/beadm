@@ -473,7 +473,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             host_id,
         } => {
             if *empty {
-                client.new(
+                client.create_empty(
                     be_name,
                     description.as_deref(),
                     host_id.as_deref(),

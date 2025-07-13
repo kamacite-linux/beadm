@@ -132,7 +132,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn new(
+    fn create_empty(
         &self,
         be_name: &str,
         description: Option<&str>,
@@ -541,7 +541,7 @@ mod tests {
     fn test_emulated_new() {
         let client = EmulatorClient::sampled();
         client
-            .new("test-empty", Some("Empty BE"), None, &[])
+            .create_empty("test-empty", Some("Empty BE"), None, &[])
             .unwrap();
 
         let bes = client.get_boot_environments().unwrap();
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn test_emulated_new_conflict() {
         let client = EmulatorClient::sampled();
-        let result = client.new("default", Some("Empty BE"), None, &[]);
+        let result = client.create_empty("default", Some("Empty BE"), None, &[]);
         assert!(matches!(result, Err(Error::Conflict { .. })));
     }
 
@@ -562,7 +562,7 @@ mod tests {
         let client = EmulatorClient::sampled();
         // Host ID is accepted but ignored in the mock implementation
         client
-            .new("test-hostid", None, Some("test-host"), &[])
+            .create_empty("test-hostid", None, Some("test-host"), &[])
             .unwrap();
 
         let bes = client.get_boot_environments().unwrap();

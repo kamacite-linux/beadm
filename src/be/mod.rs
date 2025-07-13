@@ -167,7 +167,7 @@ pub trait Client: Send + Sync {
         properties: &[String],
     ) -> Result<(), Error>;
 
-    fn new(
+    fn create_empty(
         &self,
         be_name: &str,
         description: Option<&str>,

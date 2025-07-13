@@ -71,7 +71,7 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn new(
+    fn create_empty(
         &self,
         be_name: &str,
         description: Option<&str>,
@@ -88,7 +88,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
-                "CreateNew",
+                "CreateEmpty",
                 &(be_name, desc, hid, props),
             )?
             .body()
@@ -690,7 +690,7 @@ impl BeadmManager {
     }
 
     /// Create a new empty boot environment
-    fn create_new(
+    fn create_empty(
         &self,
         name: &str,
         description: &str,
@@ -708,7 +708,7 @@ impl BeadmManager {
             Some(host_id)
         };
 
-        self.client.new(name, desc, hid, &properties)?;
+        self.client.create_empty(name, desc, hid, &properties)?;
 
         // Get the newly created BE to find its GUID
         let bes = self.client.get_boot_environments()?;
