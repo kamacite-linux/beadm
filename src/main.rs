@@ -346,33 +346,45 @@ fn print_boot_environments<T: Client>(
         bes.retain(|be| be.name == *filter_name);
     }
 
-    // Convert boot environments to rows.
-    let mut rows: Vec<ListRow> = bes.into_iter().map(ListRow::BootEnvironment).collect();
-
-    // If snapshots are requested, collect and add them to the list
-    if options.snapshots {
-        for row in rows.clone() {
-            if let ListRow::BootEnvironment(ref be) = row {
-                let snapshots = root.get_snapshots(&be.name)?;
-                rows.extend(snapshots.into_iter().map(ListRow::Snapshot));
-            }
-        }
-    }
-
-    // Sorting.
+    // Sort boot environments first.
     match options.sort_field {
         SortField::Date => {
-            rows.sort_by_key(|row| row.created());
+            bes.sort_by_key(|be| be.created);
         }
         SortField::Name => {
-            rows.sort_by(|a, b| a.name().cmp(b.name()));
+            bes.sort_by(|a, b| a.name.cmp(&b.name));
         }
         SortField::Space => {
-            rows.sort_by_key(|row| row.space());
+            bes.sort_by_key(|be| be.space);
         }
     }
     if options.descending {
-        rows.reverse();
+        bes.reverse();
+    }
+
+    // Convert boot environments (and optionally their snapshots) to rows.
+    let mut rows: Vec<ListRow> = Vec::new();
+    for be in bes.into_iter() {
+        let name = be.name.clone();
+        rows.push(ListRow::BootEnvironment(be));
+
+        // Group snapshots under their respective boot environment.
+        if options.snapshots {
+            let mut snapshots = root.get_snapshots(&name)?;
+            // Sort snapshots by the same field as boot environments
+            match options.sort_field {
+                SortField::Date => {
+                    snapshots.sort_by_key(|snap| snap.created);
+                }
+                SortField::Name => {
+                    snapshots.sort_by(|a, b| a.name.cmp(&b.name));
+                }
+                SortField::Space => {
+                    snapshots.sort_by_key(|snap| snap.space);
+                }
+            }
+            rows.extend(snapshots.into_iter().map(ListRow::Snapshot));
+        }
     }
 
     // "Machine-parsable" output: no headers, tab-separated fields.
