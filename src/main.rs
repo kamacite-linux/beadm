@@ -1,6 +1,7 @@
 use async_io::block_on;
 use chrono::{Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::fs;
 use std::path::PathBuf;
 
 mod be;
@@ -91,6 +92,17 @@ enum Commands {
         /// in /etc/hostid
         #[arg(long)]
         host_id: Option<String>,
+
+        /// Set a description for an empty boot environment using PRETTY_NAME
+        /// from an /etc/os-release file.
+        #[arg(
+            long,
+            value_name = "FILE",
+            value_hint = clap::ValueHint::FilePath,
+            requires = "empty",
+            conflicts_with = "description"
+        )]
+        use_os_release: Option<PathBuf>,
     },
     /// Create a snapshot of a boot environment.
     Snapshot {
@@ -460,6 +472,33 @@ fn is_temp_mountpoint(path: &PathBuf) -> bool {
     path.to_string_lossy().starts_with(prefix.to_str().unwrap())
 }
 
+/// Parse the `PRETTY_NAME` field from an `/etc/os-release`-style file.
+fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String, Error> {
+    let content = fs::read_to_string(path)?;
+
+    // We could use a regular expression for this instead.
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("PRETTY_NAME=") {
+            let value = &line[12..];
+
+            // Handle quoted values.
+            if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+                return Ok(value[1..value.len() - 1].to_string());
+            } else if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
+                return Ok(value[1..value.len() - 1].to_string());
+            } else {
+                return Ok(value.to_string());
+            }
+        }
+    }
+
+    // TODO: This is kind of a gross error.
+    Err(Error::OsReleasePrettyNameNotFound {
+        path: path.to_string_lossy().to_string(),
+    })
+}
+
 fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result<(), Error> {
     match command {
         Commands::Create {
@@ -471,11 +510,18 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             property,
             empty,
             host_id,
+            use_os_release,
         } => {
             if *empty {
+                let final_description = if let Some(os_release_path) = use_os_release {
+                    Some(parse_os_release_pretty_name(os_release_path)?)
+                } else {
+                    description.clone()
+                };
+
                 client.create_empty(
                     be_name,
-                    description.as_deref(),
+                    final_description.as_deref(),
                     host_id.as_deref(),
                     property,
                 )?;

@@ -47,6 +47,9 @@ pub enum Error {
 
     #[error("D-Bus error: {0}")]
     ZbusError(#[from] zbus::Error),
+
+    #[error("PRETTY_NAME field not found in os-release file: {path}")]
+    OsReleasePrettyNameNotFound { path: String },
 }
 
 impl From<Error> for zbus::fdo::Error {
