@@ -62,7 +62,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
-                "create",
+                "Create",
                 &(be_name, desc, src, props),
             )?
             .body()
@@ -88,7 +88,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
-                "create_new",
+                "CreateNew",
                 &(be_name, desc, hid, props),
             )?
             .body()
@@ -109,7 +109,7 @@ impl Client for ClientProxy {
             Some(SERVICE_NAME),
             &be_object_path(guid),
             Some(BOOT_ENV_INTERFACE),
-            "destroy",
+            "Destroy",
             &(force_unmount, force_no_verify, snapshots),
         )?;
         Ok(())
@@ -125,7 +125,7 @@ impl Client for ClientProxy {
             Some(SERVICE_NAME),
             &be_object_path(guid),
             Some(BOOT_ENV_INTERFACE),
-            "mount",
+            "Mount",
             &(mountpoint, read_only),
         )?;
         Ok(())
@@ -139,7 +139,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 &be_object_path(guid),
                 Some(BOOT_ENV_INTERFACE),
-                "unmount",
+                "Unmount",
                 &(force,),
             )?
             .body()
@@ -160,7 +160,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 &be_object_path(guid),
                 Some(BOOT_ENV_INTERFACE),
-                "get_hostid",
+                "GetHostid",
                 &(),
             )?
             .body()
@@ -179,7 +179,7 @@ impl Client for ClientProxy {
             Some(SERVICE_NAME),
             &be_object_path(guid),
             Some(BOOT_ENV_INTERFACE),
-            "rename",
+            "Rename",
             &(new_name,),
         )?;
         Ok(())
@@ -191,7 +191,7 @@ impl Client for ClientProxy {
             Some(SERVICE_NAME),
             &be_object_path(guid),
             Some(BOOT_ENV_INTERFACE),
-            "activate",
+            "Activate",
             &(temporary,),
         )?;
         Ok(())
@@ -202,7 +202,7 @@ impl Client for ClientProxy {
             Some(SERVICE_NAME),
             BOOT_ENV_PATH,
             Some(MANAGER_INTERFACE),
-            "clear_boot_once",
+            "ClearBootOnce",
             &(),
         )?;
         Ok(())
@@ -214,7 +214,7 @@ impl Client for ClientProxy {
             Some(SERVICE_NAME),
             &be_object_path(guid),
             Some(BOOT_ENV_INTERFACE),
-            "rollback",
+            "Rollback",
             &(snapshot,),
         )?;
         Ok(())
@@ -252,7 +252,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 &be_object_path(guid),
                 Some(BOOT_ENV_INTERFACE),
-                "get_snapshots",
+                "GetSnapshots",
                 &(),
             )?
             .body()
@@ -285,7 +285,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
-                "snapshot",
+                "Snapshot",
                 &(src, desc),
             )?
             .body()
@@ -300,7 +300,7 @@ impl Client for ClientProxy {
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
                 Some(MANAGER_INTERFACE),
-                "init",
+                "Init",
                 &(pool,),
             )?
             .body()
