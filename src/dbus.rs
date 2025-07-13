@@ -4,6 +4,8 @@ use async_io::block_on;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
+use tracing;
+use tracing_subscriber;
 use zbus::object_server::SignalEmitter;
 use zbus::{Connection, Result as ZbusResult, blocking, interface};
 use zvariant::ObjectPath;
@@ -798,6 +800,11 @@ impl BeadmObjectManager {
 
 /// Start a D-Bus service for boot environment administration.
 pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResult<()> {
+    // Logs in journald don't need colours.
+    tracing_subscriber::fmt()
+        .event_format(tracing_subscriber::fmt::format().with_ansi(false).compact())
+        .init();
+
     let client: Arc<dyn Client> = Arc::new(client);
 
     let builder = if use_session_bus {
@@ -812,11 +819,8 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
         .serve_at(BOOT_ENV_PATH, BeadmObjectManager::new(client))?
         .build()?;
 
-    let bus_type = if use_session_bus { "session" } else { "system" };
-    println!(
-        "D-Bus service started at {} on {} bus",
-        SERVICE_NAME, bus_type
-    );
+    let bus = if use_session_bus { "session" } else { "system" };
+    tracing::info!(service_name = SERVICE_NAME, bus, "D-Bus service started");
 
     // Initial population of objects
     let manager = &connection
@@ -828,7 +832,7 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if let Err(e) = block_on(manager.get().refresh(&connection.object_server().inner())) {
-            eprintln!("Error refreshing objects: {}", e);
+            tracing::error!("Error refreshing objects: {}", e);
         }
     }
 }
