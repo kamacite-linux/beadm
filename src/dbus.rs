@@ -567,12 +567,12 @@ impl BootEnvironmentObject {
 
 /// Main beadm manager implementing ObjectManager
 #[derive(Clone)]
-pub struct BeadmManager {
+pub struct BootEnvironmentManager {
     client: Arc<dyn Client>,
     guids: Arc<Mutex<HashSet<u64>>>,
 }
 
-impl BeadmManager {
+impl BootEnvironmentManager {
     pub fn new(client: Arc<dyn Client>) -> Self {
         Self {
             client,
@@ -582,7 +582,7 @@ impl BeadmManager {
 }
 
 #[interface(name = "ca.kamacite.BootEnvironmentManager")]
-impl BeadmManager {
+impl BootEnvironmentManager {
     /// Refresh managed objects.
     pub async fn refresh(
         &self,
@@ -595,7 +595,7 @@ impl BeadmManager {
             .map(|env| (env.guid, env))
             .collect();
         let object_manager = object_server
-            .interface::<_, BeadmObjectManager>(BOOT_ENV_PATH)
+            .interface::<_, ObjectManager>(BOOT_ENV_PATH)
             .await?;
         let mut guids = self.guids.lock().unwrap().clone(); // Clone to get Send.
 
@@ -626,7 +626,7 @@ impl BeadmManager {
 
             // Emit an InterfacesRemoved signal, even if the object was not
             // destroyed by remove().
-            BeadmObjectManager::interfaces_removed(
+            ObjectManager::interfaces_removed(
                 object_manager.signal_emitter(),
                 &path,
                 vec![BOOT_ENV_INTERFACE.to_string()],
@@ -645,7 +645,7 @@ impl BeadmManager {
                     // Emit an InterfacesAdded signal after successful at().
                     let mut interfaces = BTreeMap::new();
                     interfaces.insert(BOOT_ENV_INTERFACE.to_string(), &env);
-                    BeadmObjectManager::interfaces_added(
+                    ObjectManager::interfaces_added(
                         object_manager.signal_emitter(),
                         &path,
                         interfaces,
@@ -754,18 +754,18 @@ impl BeadmManager {
 
 /// ObjectManager interface implementation
 #[derive(Clone)]
-pub struct BeadmObjectManager {
+pub struct ObjectManager {
     client: Arc<dyn Client>,
 }
 
-impl BeadmObjectManager {
+impl ObjectManager {
     pub fn new(client: Arc<dyn Client>) -> Self {
         Self { client }
     }
 }
 
 #[interface(name = "org.freedesktop.DBus.ObjectManager")]
-impl BeadmObjectManager {
+impl ObjectManager {
     /// Get all managed objects and their interfaces
     fn get_managed_objects(
         &self,
@@ -815,8 +815,8 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
 
     let connection = builder
         .name(SERVICE_NAME)?
-        .serve_at(BOOT_ENV_PATH, BeadmManager::new(client.clone()))?
-        .serve_at(BOOT_ENV_PATH, BeadmObjectManager::new(client))?
+        .serve_at(BOOT_ENV_PATH, BootEnvironmentManager::new(client.clone()))?
+        .serve_at(BOOT_ENV_PATH, ObjectManager::new(client))?
         .build()?;
 
     let bus = if use_session_bus { "session" } else { "system" };
@@ -825,7 +825,7 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     // Initial population of objects
     let manager = &connection
         .object_server()
-        .interface::<_, BeadmManager>(BOOT_ENV_PATH)?;
+        .interface::<_, BootEnvironmentManager>(BOOT_ENV_PATH)
     block_on(manager.get().refresh(&connection.object_server().inner()))?;
 
     // Keep the connection alive and periodically refresh objects
