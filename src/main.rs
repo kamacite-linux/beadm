@@ -670,7 +670,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         }
         #[cfg(feature = "dbus")]
         Commands::Serve { user } => {
-            serve(client, *user)?;
+            block_on(serve(client, *user))?;
             Ok(())
         }
     }

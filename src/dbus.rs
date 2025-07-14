@@ -1,13 +1,12 @@
 use crate::be::Error as BeError;
 use crate::be::{BootEnvironment, Client, MountMode, Snapshot};
-use async_io::block_on;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use tracing;
 use tracing_subscriber;
 use zbus::object_server::SignalEmitter;
-use zbus::{Connection, Result as ZbusResult, blocking, interface};
+use zbus::{Connection, blocking, interface};
 use zvariant::ObjectPath;
 
 // D-Bus service constants
@@ -799,7 +798,7 @@ impl ObjectManager {
 }
 
 /// Start a D-Bus service for boot environment administration.
-pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResult<()> {
+pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbus::Result<()> {
     // Logs in journald don't need colours.
     tracing_subscriber::fmt()
         .event_format(tracing_subscriber::fmt::format().with_ansi(false).compact())
@@ -808,30 +807,33 @@ pub fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> ZbusResul
     let client: Arc<dyn Client> = Arc::new(client);
 
     let builder = if use_session_bus {
-        blocking::connection::Builder::session()?
+        zbus::connection::Builder::session()?
     } else {
-        blocking::connection::Builder::system()?
+        zbus::connection::Builder::system()?
     };
 
     let connection = builder
         .name(SERVICE_NAME)?
         .serve_at(BOOT_ENV_PATH, BootEnvironmentManager::new(client.clone()))?
         .serve_at(BOOT_ENV_PATH, ObjectManager::new(client))?
-        .build()?;
+        .build()
+        .await?;
 
     let bus = if use_session_bus { "session" } else { "system" };
     tracing::info!(service_name = SERVICE_NAME, bus, "D-Bus service started");
 
     // Initial population of objects
-    let manager = &connection
+    let iface_ref = connection
         .object_server()
         .interface::<_, BootEnvironmentManager>(BOOT_ENV_PATH)
-    block_on(manager.get().refresh(&connection.object_server().inner()))?;
+        .await?;
+    let manager = iface_ref.get().await;
+    manager.refresh(&connection.object_server()).await?;
 
     // Keep the connection alive and periodically refresh objects
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Err(e) = block_on(manager.get().refresh(&connection.object_server().inner())) {
+        if let Err(e) = manager.refresh(&connection.object_server()).await {
             tracing::error!("Error refreshing objects: {}", e);
         }
     }
