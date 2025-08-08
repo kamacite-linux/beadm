@@ -9,3 +9,8 @@ option('dbus',
        type : 'feature',
        value : 'auto',
        description : 'Enable D-Bus support')
+
+option('apt-hook',
+       type : 'feature',
+       value : 'auto',
+       description : 'Enable APT integration')

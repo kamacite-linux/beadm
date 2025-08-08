@@ -6,6 +6,7 @@ sources = files(
         'be/validation.rs',
         'be/zfs.rs',
         'dbus.rs',
+        'hooks.rs',
         'main.rs',
 )
 

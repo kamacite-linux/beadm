@@ -46,5 +46,15 @@ if get_option('dbus').allowed()
         install_data(dbus_policy, install_dir : dbus_policy_dir)
 endif
 
+# APT hook configuration.
+if enable_apt_hook
+        apt_hook_conf = configure_file(
+                configuration : conf,
+                input : '90-boot-environments.conf.in',
+                output : '@BASENAME@')
+
+        install_data(apt_hook_conf, install_dir : apt_hooks_dir)
+endif
+
 # install_data('ca.kamacite.BootEnvironments1.policy',
 #              install_dir : polkit_actions_dir)

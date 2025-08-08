@@ -9,6 +9,8 @@ use std::path::PathBuf;
 mod be;
 #[cfg(feature = "dbus")]
 mod dbus;
+#[cfg(feature = "hooks")]
+mod hooks;
 
 use be::mock::EmulatorClient;
 use be::zfs::{LibZfsClient, format_zfs_bytes};
@@ -236,6 +238,10 @@ enum Commands {
         #[arg(long)]
         user: bool,
     },
+    /// APT hook integration.
+    #[cfg(feature = "hooks")]
+    #[command(hide = true)]
+    AptHook,
 }
 
 /// Field to sort boot environments by when listing them.
@@ -705,6 +711,11 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         #[cfg(feature = "dbus")]
         Commands::Serve { user } => {
             block_on(serve(client, *user)).context("Failed to start D-Bus service")?;
+            Ok(())
+        }
+        #[cfg(feature = "hooks")]
+        Commands::AptHook => {
+            hooks::execute_apt_hook(&client).context("Failed to run APT hook")?;
             Ok(())
         }
     }

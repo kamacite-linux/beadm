@@ -56,6 +56,20 @@ if get_option('dbus').allowed()
         })
 endif
 
+apt_conf_dir = '/' / get_option('sysconfdir') / 'apt'
+has_apt = import('fs').is_dir(apt_conf_dir)
+# As of meson 1.1.0 this could be:
+# > get_option('apt-hook').enable_auto_if(has_apt).allowed()
+enable_apt_hook = get_option('apt-hook').auto() and has_apt
+if get_option('apt-hook').enabled()
+        enable_apt_hook = true
+endif
+
+if enable_apt_hook
+        apt_hooks_dir = apt_conf_dir / 'apt.conf.d'
+        summary('apt hooks', apt_hooks_dir)
+endif
+
 # Configuration data -----------------------------------------------------------
 
 bus_name = 'ca.kamacite.BootEnvironments1'

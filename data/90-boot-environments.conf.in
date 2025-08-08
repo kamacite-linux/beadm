@@ -1,0 +1,7 @@
+binary::apt::AptCli::Hooks::Install {
+  "[ ! -f @bindir@/beadm ] || @bindir@/beadm apt-hook || true";
+};
+
+binary::apt::AptCli::Hooks::Upgrade {
+  "[ ! -f @bindir@/beadm ] || @bindir@/beadm apt-hook || true";
+};
