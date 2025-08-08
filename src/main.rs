@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 #[cfg(feature = "dbus")]
 use async_io::block_on;
 use chrono::{Local, TimeZone};
@@ -504,7 +505,7 @@ fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String, Error> {
     })
 }
 
-fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result<(), Error> {
+fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result<()> {
     match command {
         Commands::Create {
             be_name,
@@ -524,19 +525,25 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                     description.clone()
                 };
 
-                client.create_empty(
-                    be_name,
-                    final_description.as_deref(),
-                    host_id.as_deref(),
-                    property,
-                )?;
+                client
+                    .create_empty(
+                        be_name,
+                        final_description.as_deref(),
+                        host_id.as_deref(),
+                        property,
+                    )
+                    .context("Failed to create empty boot environment")?;
                 println!("Created empty boot environment '{}'.", be_name);
                 return Ok(());
             }
 
-            client.create(be_name, description.as_deref(), source.as_deref(), property)?;
+            client
+                .create(be_name, description.as_deref(), source.as_deref(), property)
+                .context("Failed to create boot environment")?;
             if *activate || *temp_activate {
-                client.activate(be_name, *temp_activate)?;
+                client
+                    .activate(be_name, *temp_activate)
+                    .context("Failed to activate newly-created boot environment")?;
             }
             println!(
                 "Created {} boot environment '{}'.",
@@ -557,7 +564,9 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             destroy_snapshots,
             no_verify,
         } => {
-            client.destroy(target, *force_unmount, *no_verify, *destroy_snapshots)?;
+            client
+                .destroy(target, *force_unmount, *no_verify, *destroy_snapshots)
+                .context("Failed to destroy boot environment")?;
             println!("Destroyed '{}'.", target);
             Ok(())
         }
@@ -582,6 +591,8 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             };
 
             print_boot_environments(&client, &mut std::io::stdout(), options)
+                .context("Failed to list boot environments")?;
+            Ok(())
         }
         Commands::Mount {
             be_name,
@@ -589,33 +600,43 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             mode,
         } => {
             if let Some(mountpoint) = mountpoint {
-                client.mount(be_name, mountpoint, *mode)?;
+                client
+                    .mount(be_name, mountpoint, *mode)
+                    .context("Failed to mount boot environment")?;
                 return Ok(());
             }
 
             // If no mountpoint is specified, create a temporary one and write
             // it to standard output for downstream consumption.
-            let mut temp_dir = tempfile::TempDir::with_prefix("be_mount.")?;
+            let mut temp_dir = tempfile::TempDir::with_prefix("be_mount.")
+                .context("Failed to create temporary mountpoint directory")?;
             let temp_path = temp_dir.path().to_string_lossy().to_string();
-            client.mount(be_name, &temp_path, *mode)?;
+            client
+                .mount(be_name, &temp_path, *mode)
+                .context("Failed to mount boot environment at temporary path")?;
             temp_dir.disable_cleanup(true);
             println!("{}", temp_path);
             Ok(())
         }
         Commands::Unmount { be_name, force } => {
-            let mountpoint = client.unmount(be_name, *force)?;
+            let mountpoint = client
+                .unmount(be_name, *force)
+                .context("Failed to unmount boot environment")?;
 
             // Check for temporary mountpoints we need to clean up.
             if let Some(mp) = mountpoint {
                 if is_temp_mountpoint(&mp) {
-                    std::fs::remove_dir_all(&mp)?;
+                    std::fs::remove_dir_all(&mp)
+                        .context("Failed to clean up temporary mountpoint")?;
                 }
             }
 
             Ok(())
         }
         Commands::Rename { be_name, new_name } => {
-            client.rename(be_name, new_name)?;
+            client
+                .rename(be_name, new_name)
+                .context("Failed to rename boot environment")?;
             println!("Renamed boot environment '{}' to '{}'.", be_name, new_name);
             Ok(())
         }
@@ -625,12 +646,16 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             deactivate,
         } => {
             if *deactivate {
-                client.clear_boot_once()?;
+                client
+                    .clear_boot_once()
+                    .context("Failed to remove temporary boot environment activation")?;
                 println!("Removed temporary boot environment activation.");
             } else {
                 // SAFETY: Safe due to required_unless_present.
                 let be_name = be_name.as_ref().unwrap();
-                client.activate(be_name, *temporary)?;
+                client
+                    .activate(be_name, *temporary)
+                    .context("Failed to activate boot environment")?;
                 println!(
                     "Activated '{}'{}.",
                     be_name,
@@ -640,12 +665,17 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             Ok(())
         }
         Commands::Rollback { be_name, snapshot } => {
-            client.rollback(be_name, snapshot)?;
+            client
+                .rollback(be_name, snapshot)
+                .context("Failed to rollback to snapshot")?;
             println!("Rolled back to '{}'.", snapshot);
             Ok(())
         }
         Commands::Hostid { be_name } => {
-            match client.hostid(be_name)? {
+            match client
+                .hostid(be_name)
+                .context("Failed to retrieve host ID")?
+            {
                 Some(id) => println!("0x{:08x}", id),
                 None => {
                     // TODO: Should probably be using anyhow here.
@@ -659,24 +689,28 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             source,
             description,
         } => {
-            let snapshot_name = client.snapshot(source.as_deref(), description.as_deref())?;
+            let snapshot_name = client
+                .snapshot(source.as_deref(), description.as_deref())
+                .context("Failed to create snapshot")?;
             println!("Created '{}'.", snapshot_name);
             Ok(())
         }
         Commands::Init { pool } => {
-            client.init(pool)?;
+            client
+                .init(pool)
+                .context("Failed to initialize a boot environment dataset layout")?;
             println!("Boot environment dataset layout initialized.");
             Ok(())
         }
         #[cfg(feature = "dbus")]
         Commands::Serve { user } => {
-            block_on(serve(client, *user))?;
+            block_on(serve(client, *user)).context("Failed to start D-Bus service")?;
             Ok(())
         }
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.client {
@@ -879,7 +913,9 @@ alt      -       -           8K     2021-06-10 02:11  Testing
             client2,
         );
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
+        let err = result.unwrap_err();
+        let be_err = err.downcast_ref::<Error>().expect("Should be a be::Error");
+        assert!(matches!(be_err, Error::NotFound { name } if name == "non-existent"));
 
         // Note: Testing the "no hostid found" case (exit code 1) requires
         // integration tests since it calls std::process::exit(1)
@@ -931,7 +967,9 @@ alt      -       -           8K     2021-06-10 02:11  Testing
             client,
         );
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
+        let err = result.unwrap_err();
+        let be_err = err.downcast_ref::<Error>().expect("Should be a be::Error");
+        assert!(matches!(be_err, Error::NotFound { name } if name == "non-existent"));
     }
 
     #[test]
@@ -962,7 +1000,9 @@ alt      -       -           8K     2021-06-10 02:11  Testing
             client2,
         );
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
+        let err = result.unwrap_err();
+        let be_err = err.downcast_ref::<Error>().expect("Should be a be::Error");
+        assert!(matches!(be_err, Error::NotFound { name } if name == "non-existent"));
     }
 
     #[test]
