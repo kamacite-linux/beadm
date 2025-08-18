@@ -9,6 +9,7 @@ project('beadm',
 # Dependencies -----------------------------------------------------------------
 
 cargo = find_program('cargo', required : true)
+scdoc = find_program('scdoc', required : true)
 libzfs_dep = dependency('libzfs', required : true)
 systemd_dep = dependency('systemd', version : '>= 242', required : get_option('systemd'))
 
@@ -17,11 +18,13 @@ systemd_dep = dependency('systemd', version : '>= 242', required : get_option('s
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
+mandir = prefix / get_option('mandir')
 
 summary({
         'prefix' : prefix,
         'bindir' : bindir,
         'datadir' : datadir,
+        'mandir' : mandir,
         'opt': get_option('optimization'),
         'debug': get_option('debug'),
         'buildtype': get_option('buildtype'),
@@ -78,4 +81,5 @@ conf = configuration_data({'bindir' : bindir, 'bus_name' : bus_name})
 # Subdirectories ---------------------------------------------------------------
 
 subdir('data')
+subdir('doc')
 subdir('src')
