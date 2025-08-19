@@ -6,7 +6,31 @@ beadm - Boot Environment Administration
 
 # SYNOPSIS
 
-*beadm* [*-r* _beroot_] _command_ [_args_...]
+*beadm* *activate* _name_ | *-t* _name_ | *-T*
+
+*beadm* *create* [*-a* | *-t*] [*-d* _desc_] [*-o* _property=value_]
+	\[*-e* _source_] _name_
+
+*beadm* *create* [*-a* | *-t*] [*-d* _desc_] [*-o* _property=value_]
+	\[*--use-os-release* _file_] *--empty* _name_
+
+*beadm* *snapshot* [*-d* _desc_] [_name_ | _name@snapshot_]
+
+*beadm* *destroy* [*-fs*] _name_ | _name@snapshot_
+
+*beadm* *list* [*-adsH*] [*-k* _property_ | *-K* _property_] [_name_]
+
+*beadm* *mount* [*-s* _mode_] _name_ [_mountpoint_]
+
+*beadm* *unmount* [*-f*] _name_
+
+*beadm* *rename* _name_ _new-name_
+
+*beadm* *rollback* _name_ _snapshot_
+
+*beadm* *init* _pool_
+
+*beadm* *serve*
 
 # DESCRIPTION
 
@@ -31,7 +55,8 @@ same installation) on a single system.
 	*-T*
 		Remove any temporary activations instead.
 
-*create* [*-a* | *-t*] [*-d* _desc_] [*-e* _source_ | *--empty*] [*-o* _property=value_] [*--host-id* _id_] [*--use-os-release* _file_] _be-name_
+*create* [*-a* | *-t*] [*-d* _desc_] [*-o* _property=value_]
+	\[*-e* _source_ | *--empty*] [*--use-os-release* _file_] _name_
 
 	Create a new boot environment.
 
@@ -58,13 +83,13 @@ same installation) on a single system.
 
 	*--use-os-release* _file_
 		Set a description for an empty boot environment using *PRETTY_NAME* from the
-		specified /etc/os-release file.
+		specified _/etc/os-release_ file.
 
-*snapshot* [*-d* _desc_] [_name_]
+*snapshot* [*-d* _desc_] [_name_ | _name@snapshot_]
 
 	Create a snapshot of a boot environment.
 
-	_name_
+	_name_ | _name@snapshot_
 		The boot environment and optional snapshot name (in the form _name_ or
 		_name@snapshot_). When the snapshot name is omitted, one will be generated
 		automatically from the current time.
@@ -72,11 +97,11 @@ same installation) on a single system.
 	*-d* _desc_
 		Set a description for the snapshot.
 
-*destroy* [*-f*] [*-s*] _target_
+*destroy* [*-fs*] _name_ | _name@snapshot_
 
 	Destroy an existing boot environment or snapshot.
 
-	_target_
+	_name_ | _name@snapshot_
 		The boot environment or snapshot to destroy (in the form _name_ or
 		_name@snapshot_).
 
@@ -86,7 +111,7 @@ same installation) on a single system.
 	*-s*
 		Destroy snapshots of the boot environment if needed.
 
-*list* [*-a* | *-d* | *-s*] [*-H*] [*-k* _property_ | *-K* _property_] [_name_]
+*list* [*-adsH*] [*-k* _property_ | *-K* _property_] [_name_]
 
 	List boot environments.
 
@@ -180,7 +205,7 @@ same installation) on a single system.
 
 *-r*, *--beroot* _dataset_
 	Set the boot environment root dataset. This is the parent dataset of all boot
-	environments. If not specified, beadm will attempt to auto-detect the root
+	environments. If not specified, *beadm* will attempt to auto-detect the root
 	from the currently active boot environment.
 
 *-v*, *--verbose*
@@ -188,27 +213,27 @@ same installation) on a single system.
 
 *--client* _type_
 	Select the client implementation to use. Valid values are:
-	- *libzfs*: Use LibZFS directly (default)
-	- *mock*: Use a mock/emulator client for testing
-	- *dbus*: Use the D-Bus client (if compiled with D-Bus support)
+	- _libzfs_: Use LibZFS directly (default)
+	- _mock_: Use a mock/emulator client for testing
+	- _dbus_: Use the D-Bus client (if compiled with D-Bus support)
 
 # OUTPUT FORMAT
 
-The *list* command displays boot environments in a tabular format with the following
+*beadm list* displays boot environments in a tabular format with the following
 columns:
 
 *NAME*
 	The name of the boot environment or snapshot.
 
 *ACTIVE*
-	Indicates the status of the boot environment:
-	- *R*: Currently active (root filesystem)
-	- *N*: Set as the default for next boot
-	- *T*: Temporarily activated for next boot only
-	- *-*: Inactive
+	One or more flags for the activation status of the boot environment:
+
+	- _R_: Active now (i.e. it is the current filesystem for _/_).
+	- _N_: Active on reboot.
+	- _T_: Active on reboot temporarily.
 
 *MOUNTPOINT*
-	The current mount point of the boot environment, or *-* if not mounted.
+	The current mount point of the boot environment, if any.
 
 *SPACE*
 	The amount of space used by the boot environment.
@@ -217,7 +242,7 @@ columns:
 	The date and time when the boot environment was created.
 
 *DESCRIPTION*
-	An optional description of the boot environment, or *-* if none is set.
+	The description of the boot environment, if any.
 
 # EXAMPLES
 
@@ -265,7 +290,7 @@ Roll back to a previous snapshot:
 The original *beadm* (and the accompanying *libbe*) first appeared in Solaris
 10, with later improvements under the illumos project.
 
-Slawomir	Wojciech Wojtczak (vermaden) wrote a well-known *beadm* clone (in
+Slawomir Wojciech Wojtczak (vermaden) wrote a well-known *beadm* clone (in
 Shell) for FreeBSD, where it was available as a port. FreeBSD 13 introduced its
 successor *bectl* (rewritten in C by Kyle Kneitingerone and once again
 accompanied by a *libbe*) as part of the base system.
