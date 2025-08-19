@@ -98,9 +98,7 @@ impl Client for LibZfsClient {
                 // Case #3: beadm create NAME, which creates the clone from a
                 // snapshot of the active boot environment.
                 let snapshot_path = get_rootfs()?
-                    .ok_or_else(|| Error::ZfsError {
-                        message: "Not running on ZFS root".to_string(),
-                    })?
+                    .ok_or_else(|| Error::NoActiveBootEnvironment)?
                     .generate_snapshot()?;
 
                 Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref())
@@ -187,7 +185,7 @@ impl Client for LibZfsClient {
         let mountpoint = dataset.get_mountpoint();
         if mountpoint.is_some() {
             if !force_unmount {
-                return Err(Error::BeMounted {
+                return Err(Error::Mounted {
                     name: be_name.to_string(),
                     mountpoint: mountpoint.unwrap().display().to_string(),
                 });
@@ -276,9 +274,10 @@ impl Client for LibZfsClient {
             // For temporary activation, (1) copy the current `bootfs` into the
             // `previous-bootfs` property; and then (2) write the new `bootfs`
             // value.
-            let current_bootfs = zpool.get_bootfs().ok_or_else(|| Error::ZfsError {
-                message: "No current bootfs set on pool".to_string(),
-            })?;
+            let current_bootfs = zpool
+                .get_bootfs()
+                // TODO: We could potentially have a more useful error here.
+                .ok_or_else(|| Error::NoActiveBootEnvironment)?;
             zpool.set_previous_bootfs(&lzh, &current_bootfs)?;
             zpool.set_bootfs(&lzh, &dataset)
         } else {
@@ -294,16 +293,7 @@ impl Client for LibZfsClient {
         let be_dataset = Dataset::filesystem(&lzh, &be_path)?;
         let snap_path = self.root.snapshot(snapshot)?;
         let snap_dataset = Dataset::snapshot(&lzh, &snap_path)?;
-
-        // TODO: Better error mapping.
-        be_dataset
-            .rollback_to(&snap_dataset)
-            .map_err(|_| Error::ZfsError {
-                message: format!(
-                    "Failed to rollback boot environment '{}' to snapshot '{}'",
-                    be_name, snapshot
-                ),
-            })
+        be_dataset.rollback_to(&lzh, &snap_dataset)
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
@@ -313,7 +303,7 @@ impl Client for LibZfsClient {
         let bootfs = self.get_next_boot(&lzh)?;
         let previous_bootfs = self.get_previous_boot(&lzh)?;
         let mut bes = Vec::new();
-        root_dataset.iter_children(|dataset| {
+        root_dataset.iter_children(&lzh, |dataset| {
             let path = match dataset.get_name() {
                 Some(name) => name,
                 None => return Ok(()), // Skip this iteration
@@ -354,7 +344,7 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let dataset = Dataset::filesystem(&lzh, &be_path)?;
         let mut snapshots = Vec::new();
-        dataset.iter_snapshots(|snapshot| {
+        dataset.iter_snapshots(&lzh, |snapshot| {
             if let Some(path) = snapshot.get_name() {
                 snapshots.push(Snapshot {
                     name: path.basename(),
@@ -385,9 +375,7 @@ impl Client for LibZfsClient {
             }
             Some(src) => self.root.append(src)?.generate_snapshot(),
             None => get_rootfs()?
-                .ok_or_else(|| Error::ZfsError {
-                    message: "Not running on ZFS root".to_string(),
-                })?
+                .ok_or_else(|| Error::NoActiveBootEnvironment)?
                 .generate_snapshot(),
         }?;
 
@@ -415,9 +403,10 @@ impl Client for LibZfsClient {
         let zpool = Zpool::open(&lzh, &self.root.pool())?;
 
         // Get the previous bootfs value
-        let previous_bootfs = zpool.get_previous_bootfs().ok_or_else(|| Error::ZfsError {
-            message: "No temporary boot environment is active".to_string(),
-        })?;
+        let previous_bootfs = match zpool.get_previous_bootfs() {
+            Some(value) => value,
+            None => return Ok(()), // Nothing to clear.
+        };
 
         // Set the bootfs back to the previous value.
         zpool.set_bootfs(&lzh, &previous_bootfs)?;
@@ -438,11 +427,8 @@ impl Client for LibZfsClient {
                 // Verify that mountpoint=none.
                 if let Some(mountpoint) = dataset.get_mountpoint_property() {
                     if mountpoint != "none" {
-                        return Err(Error::ZfsError {
-                            message: format!(
-                                "Dataset {}/ROOT exists but has wrong mountpoint '{}' (expected 'none')",
-                                pool, mountpoint
-                            ),
+                        return Err(Error::InvalidBootEnvironmentRoot {
+                            name: root_dataset.to_string(),
                         });
                     }
                 }
@@ -462,12 +448,7 @@ impl Client for LibZfsClient {
                 // Verify that mountpoint=/home.
                 if let Some(mountpoint) = dataset.get_mountpoint_property() {
                     if mountpoint != "/home" {
-                        return Err(Error::ZfsError {
-                            message: format!(
-                                "Dataset {}/home exists but has wrong mountpoint '{}' (expected '/home')",
-                                pool, mountpoint
-                            ),
-                        });
+                        return Err(Error::invalid_prop("mountpoint", &mountpoint));
                     }
                 }
             }
@@ -669,18 +650,16 @@ impl Dataset {
     }
 
     /// Rollback this dataset to the specified snapshot.
-    pub fn rollback_to(&self, snapshot: &Dataset) -> Result<(), Error> {
+    pub fn rollback_to(&self, lzh: &LibHandle, snapshot: &Dataset) -> Result<(), Error> {
         let result = unsafe { ffi::zfs_rollback(self.handle, snapshot.handle, 0) };
         if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to rollback dataset".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
         Ok(())
     }
 
     /// Iterate over the snapshots of this dataset.
-    pub fn iter_snapshots<F>(&self, callback: F) -> Result<(), Error>
+    pub fn iter_snapshots<F>(&self, lzh: &LibHandle, callback: F) -> Result<(), Error>
     where
         F: FnMut(&Dataset) -> Result<(), Error>,
     {
@@ -732,16 +711,14 @@ impl Dataset {
         }
 
         if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to iterate over snapshots".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
 
         Ok(())
     }
 
     /// Iterate over child datasets.
-    pub fn iter_children<F>(&self, callback: F) -> Result<(), Error>
+    pub fn iter_children<F>(&self, lzh: &LibHandle, callback: F) -> Result<(), Error>
     where
         F: FnMut(&Dataset) -> Result<(), Error>,
     {
@@ -790,9 +767,7 @@ impl Dataset {
         }
 
         if result != 0 {
-            return Err(Error::ZfsError {
-                message: "Failed to iterate over children".to_string(),
-            });
+            return Err(lzh.libzfs_error().into());
         }
 
         Ok(())

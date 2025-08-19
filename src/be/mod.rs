@@ -29,16 +29,19 @@ pub enum Error {
     InvalidPath { path: String },
 
     #[error("Boot environment name '{name}' is currently mounted at '{mountpoint}'")]
-    BeMounted { name: String, mountpoint: String },
+    Mounted { name: String, mountpoint: String },
 
     #[error("Boot environment '{name}' must be mounted to access its contents")]
     NotMounted { name: String },
 
-    #[error("ZFS operation failed: {message}")]
-    ZfsError { message: String },
-
     #[error("Invalid property '{name}={value}'")]
     InvalidProp { name: String, value: String },
+
+    #[error("The root filesystem is not a ZFS boot environment")]
+    NoActiveBootEnvironment,
+
+    #[error("Invalid boot environment root: '{name}'")]
+    InvalidBootEnvironmentRoot { name: String },
 
     #[error(transparent)]
     LibzfsError(#[from] zfs::LibzfsError),
@@ -49,12 +52,6 @@ pub enum Error {
     #[cfg(feature = "dbus")]
     #[error("D-Bus error: {0}")]
     ZbusError(#[from] zbus::Error),
-
-    #[error("The root filesystem is not a ZFS boot environment")]
-    NoActiveBootEnvironment,
-
-    #[error("Invalid boot environment root: '{name}'")]
-    InvalidBootEnvironmentRoot { name: String },
 }
 
 #[cfg(feature = "dbus")]
@@ -99,7 +96,7 @@ impl Error {
     }
 
     pub fn mounted(name: &str, mountpoint: &Path) -> Self {
-        Error::BeMounted {
+        Error::Mounted {
             name: name.to_string(),
             mountpoint: mountpoint.display().to_string(),
         }

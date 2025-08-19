@@ -188,7 +188,7 @@ impl Client for EmulatorClient {
             }
 
             if !force_unmount && be.mountpoint.is_some() {
-                return Err(Error::BeMounted {
+                return Err(Error::Mounted {
                     name: be.name.to_string(),
                     mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
                 });
@@ -222,7 +222,7 @@ impl Client for EmulatorClient {
 
             // Check if it's already mounted
             if be.mountpoint.is_some() {
-                return Err(Error::BeMounted {
+                return Err(Error::Mounted {
                     name: be_name.to_string(),
                     mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
                 });
@@ -373,9 +373,7 @@ impl Client for EmulatorClient {
 
         let temporary_be_index = bes.iter().position(|be| be.boot_once);
         if temporary_be_index.is_none() {
-            return Err(Error::ZfsError {
-                message: "No temporary boot environment is active".to_string(),
-            });
+            return Ok(()); // Nothing to clear.
         }
 
         if let Some(index) = temporary_be_index {
@@ -438,9 +436,7 @@ impl Client for EmulatorClient {
                 let active_be = bes
                     .iter()
                     .find(|be| be.active)
-                    .ok_or_else(|| Error::ZfsError {
-                        message: "No active boot environment found".to_string(),
-                    })?;
+                    .ok_or_else(|| Error::NoActiveBootEnvironment)?;
                 (active_be.name.clone(), None)
             }
         };
@@ -681,7 +677,7 @@ mod tests {
 
         // Try to destroy without force_unmount - should fail
         let result = client.destroy("mounted-be", false, false, false);
-        assert!(matches!(result, Err(Error::BeMounted { name, mountpoint })
+        assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "mounted-be" && mountpoint == "/mnt/test"));
 
         // Verify it still exists
@@ -781,7 +777,7 @@ mod tests {
         };
         let client = EmulatorClient::new(vec![test_be]);
         let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
-        assert!(matches!(result, Err(Error::BeMounted { name, mountpoint })
+        assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "test-be" && mountpoint == "/mnt/existing"));
     }
 
@@ -1464,7 +1460,7 @@ mod tests {
 
         // Try to clear nextboot when no temporary activation exists
         let result = client.clear_boot_once();
-        assert!(matches!(result, Err(Error::ZfsError { .. })));
+        assert!(result.is_ok());
     }
 
     #[test]
