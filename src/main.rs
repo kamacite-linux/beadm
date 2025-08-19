@@ -13,7 +13,7 @@ mod dbus;
 mod hooks;
 
 use be::mock::EmulatorClient;
-use be::zfs::{LibZfsClient, format_zfs_bytes};
+use be::zfs::{DatasetName, LibZfsClient, format_zfs_bytes, get_active_boot_environment_root};
 use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
 #[cfg(feature = "dbus")]
 use dbus::{ClientProxy, serve};
@@ -737,19 +737,13 @@ fn main() -> Result<()> {
             execute_command(&cli.command, client)?;
         }
         ClientType::LibZfs => {
-            let client = match cli.beroot {
-                Some(root) => LibZfsClient::new(root)?,
-                None => match LibZfsClient::default()? {
-                    Some(client) => client,
-                    None => {
-                        eprintln!(
-                            "Could not auto-detect boot environment root. Please specify with --beroot."
-                        );
-                        std::process::exit(1);
-                    }
-                },
+            let root = match cli.beroot {
+                Some(value) => DatasetName::new(&value)?,
+                None => get_active_boot_environment_root().context(
+                    "Failed to determine the default boot environment root. Consider using the --beroot option.",
+                )?,
             };
-            execute_command(&cli.command, client)?;
+            execute_command(&cli.command, LibZfsClient::new(root))?;
         }
     }
 

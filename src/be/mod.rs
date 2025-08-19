@@ -52,6 +52,12 @@ pub enum Error {
 
     #[error("PRETTY_NAME field not found in os-release file: {path}")]
     OsReleasePrettyNameNotFound { path: String },
+
+    #[error("The root filesystem is not a ZFS boot environment")]
+    NoActiveBootEnvironment,
+
+    #[error("Invalid boot environment root: '{name}'")]
+    InvalidBootEnvironmentRoot { name: String },
 }
 
 #[cfg(feature = "dbus")]
@@ -62,6 +68,10 @@ impl From<Error> for zbus::fdo::Error {
             Error::InvalidName { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
             Error::InvalidPath { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
             Error::InvalidProp { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
+            Error::NoActiveBootEnvironment => zbus::fdo::Error::Failed(err.to_string()),
+            Error::InvalidBootEnvironmentRoot { .. } => {
+                zbus::fdo::Error::InvalidArgs(err.to_string())
+            }
             Error::ZbusError(ref e) => match e {
                 zbus::Error::FDO(fdo_err) => *fdo_err.clone(),
                 _ => zbus::fdo::Error::Failed(err.to_string()),
@@ -107,6 +117,12 @@ impl Error {
 
     pub fn not_mounted(name: &str) -> Self {
         Error::NotMounted {
+            name: name.to_string(),
+        }
+    }
+
+    pub fn invalid_root(name: &str) -> Self {
+        Error::InvalidBootEnvironmentRoot {
             name: name.to_string(),
         }
     }

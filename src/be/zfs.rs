@@ -19,46 +19,8 @@ pub struct LibZfsClient {
 
 impl LibZfsClient {
     /// Create a new client with the specified boot environment root.
-    pub fn new(root: String) -> Result<Self, Error> {
-        let root = DatasetName::new(root.as_str())?;
-        Ok(Self { root })
-    }
-
-    /// Create a new client using the default boot environment root.
-    pub fn default() -> Result<Option<Self>, Error> {
-        // We're looking for a ZFS filesystem layout that looks like the
-        // following:
-        //
-        // 1. A dataset like zroot/ROOT/default mounted at '/' with the
-        //    canmount=noauto property set.
-        // 2. The parent dataset with mountpoint=none.
-        //
-        // This parent dataset is the boot environment root.
-        let rootfs = match get_rootfs()? {
-            Some(fs) => fs,
-            None => return Ok(None), // Not running on ZFS
-        };
-
-        let lzh = LibHandle::get();
-        let rootfs_dataset = match Dataset::filesystem(&lzh, &rootfs) {
-            Ok(ds) => ds,
-            Err(_) => return Ok(None),
-        };
-        let parent_dataset = match rootfs_dataset.parent(&lzh) {
-            Some(ds) => ds,
-            None => return Ok(None),
-        };
-
-        // Check if we have the expected canmount/mountpoint setup.
-        if rootfs_dataset.get_canmount() != Some("noauto".to_string()) {
-            return Ok(None);
-        }
-        if parent_dataset.get_mountpoint_property() != Some("none".to_string()) {
-            return Ok(None);
-        }
-
-        let root = parent_dataset.get_name().unwrap();
-        Ok(Some(Self { root }))
+    pub fn new(root: DatasetName) -> Self {
+        Self { root }
     }
 
     /// Get the filesystem (if any) that will be active on next boot for the
@@ -1104,7 +1066,7 @@ impl Drop for Zpool {
 // Convenience type for already-validated ZFS dataset names that can be passed
 // directly to the FFI layer.
 #[derive(Debug, PartialEq, Eq)]
-struct DatasetName {
+pub struct DatasetName {
     inner: CString,
 }
 
@@ -1398,6 +1360,40 @@ fn get_rootfs() -> Result<Option<DatasetName>, Error> {
         }
     }
     Ok(None)
+}
+
+// Gets the parent dataset of the active boot environment, provided it exists
+// and looks valid.
+pub fn get_active_boot_environment_root() -> Result<DatasetName, Error> {
+    // We're looking for a ZFS filesystem layout that looks like the
+    // following:
+    //
+    // 1. A dataset like zroot/ROOT/default mounted at '/' with the
+    //    canmount=noauto property set.
+    // 2. The parent dataset with mountpoint=none.
+    //
+    // This parent dataset is the boot environment root.
+    let rootfs = match get_rootfs()? {
+        Some(fs) => fs,
+        None => return Err(Error::NoActiveBootEnvironment),
+    };
+    let parent = match rootfs.parent() {
+        Some(ds) => ds,
+        None => return Err(Error::NoActiveBootEnvironment),
+    };
+
+    // Check if we have the expected canmount/mountpoint setup.
+    let lzh = LibHandle::get();
+    let rootfs_ds = Dataset::filesystem(&lzh, &rootfs)?;
+    if rootfs_ds.get_canmount() != Some("noauto".to_string()) {
+        return Err(Error::invalid_root(&parent.to_string()));
+    }
+    let parent_ds = Dataset::filesystem(&lzh, &parent)?;
+    if parent_ds.get_mountpoint_property() != Some("none".to_string()) {
+        return Err(Error::invalid_root(&parent.to_string()));
+    }
+
+    Ok(parent)
 }
 
 #[cfg(test)]
