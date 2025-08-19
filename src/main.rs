@@ -485,7 +485,7 @@ fn is_temp_mountpoint(path: &PathBuf) -> bool {
 }
 
 /// Parse the `PRETTY_NAME` field from an `/etc/os-release`-style file.
-fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String, Error> {
+fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String> {
     let content = fs::read_to_string(path)?;
 
     // We could use a regular expression for this instead.
@@ -505,10 +505,10 @@ fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String, Error> {
         }
     }
 
-    // TODO: This is kind of a gross error.
-    Err(Error::OsReleasePrettyNameNotFound {
-        path: path.to_string_lossy().to_string(),
-    })
+    anyhow::bail!(
+        "PRETTY_NAME field not found in os-release file: '{}'",
+        path.to_string_lossy()
+    )
 }
 
 fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result<()> {
