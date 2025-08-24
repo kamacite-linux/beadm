@@ -462,6 +462,31 @@ impl Client for LibZfsClient {
 
         Ok(())
     }
+
+    fn describe(&self, target: &str, description: &str) -> Result<(), Error> {
+        let lzh = LibHandle::get();
+        if target.contains('@') {
+            let parts: Vec<&str> = target.split('@').collect();
+            if parts.len() != 2 {
+                return Err(Error::InvalidName {
+                    name: target.to_string(),
+                    reason: "too many '@' characters".to_string(),
+                });
+            }
+            let snapshot_path = self.root.append(parts[0])?.snapshot(parts[1])?;
+            let snapshot = Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
+                if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                    return Error::not_found(target);
+                }
+                err
+            })?;
+            snapshot.set_property(&lzh, DESCRIPTION_PROP, description)
+        } else {
+            let dataset_path = self.root.append(target)?;
+            let dataset = Dataset::boot_environment(&lzh, target, &dataset_path)?;
+            dataset.set_property(&lzh, DESCRIPTION_PROP, description)
+        }
+    }
 }
 
 /// Safe wrapper for various operations on a ZFS dataset handle.
@@ -884,6 +909,19 @@ impl Dataset {
         } else {
             None
         }
+    }
+
+    /// Set a ZFS property for this dataset.
+    fn set_property(&self, lzh: &LibHandle, prop_name: &str, value: &str) -> Result<(), Error> {
+        let prop_cstr =
+            CString::new(prop_name).map_err(|_| Error::invalid_prop(prop_name, value))?;
+        let value_cstr = CString::new(value).map_err(|_| Error::invalid_prop(prop_name, value))?;
+        let result =
+            unsafe { ffi::zfs_prop_set(self.handle, prop_cstr.as_ptr(), value_cstr.as_ptr()) };
+        if result != 0 {
+            return Err(lzh.libzfs_error().into());
+        }
+        Ok(())
     }
 
     /// Clone a dataset from an existing snapshot.
@@ -1682,6 +1720,11 @@ mod ffi {
             len: usize,
         ) -> c_int;
         pub fn zfs_get_user_props(zhp: *mut ZfsHandle) -> *mut NvList;
+        pub fn zfs_prop_set(
+            zhp: *mut ZfsHandle,
+            propname: *const c_char,
+            propval: *const c_char,
+        ) -> c_int;
 
         // Utility functions
         pub fn zfs_nicebytes(bytes: u64, buf: *mut c_char, len: usize);

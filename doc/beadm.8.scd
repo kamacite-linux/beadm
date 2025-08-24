@@ -26,6 +26,8 @@ beadm - Boot Environment Administration
 
 *beadm* *rename* _name_ _new-name_
 
+*beadm* *describe* _name_ | _name@snapshot_ _desc_
+
 *beadm* *rollback* _name_ _snapshot_
 
 *beadm* *init* _pool_
@@ -173,6 +175,17 @@ same installation) on a single system.
 	_new-name_
 		The new name for the boot environment.
 
+*describe* _name_ | _name@snapshot_ _desc_
+
+	Set a description for a boot environment or snapshot.
+
+	_name_ | _name@snapshot_
+		The boot environment or snapshot to describe (in the form _name_ or
+		_name@snapshot_).
+
+	_desc_
+		The description to set.
+
 *rollback* _name_ _snapshot_
 
 	Roll back a boot environment to an earlier snapshot.
@@ -269,6 +282,12 @@ Destroy a boot environment:
 
 Create a snapshot of the current boot environment:
 	*beadm snapshot*
+
+Set a description for a boot environment:
+	*beadm describe backup "System backup before upgrade"*
+
+Set a description for a snapshot:
+	*beadm describe backup@pre-upgrade "Before kernel update"*
 
 Roll back to a previous snapshot:
 	*beadm rollback current-be@yesterday*

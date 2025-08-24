@@ -308,6 +308,29 @@ impl Client for ClientProxy {
             .deserialize()?;
         Ok(())
     }
+
+    fn describe(&self, target: &str, description: &str) -> Result<(), BeError> {
+        if target.contains('@') {
+            // TODO: Actually implement this on the server side.
+            self.connection.call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
+                "Describe",
+                &(target, description),
+            )?;
+        } else {
+            let guid = self.get_be_guid(target)?;
+            self.connection.call_method(
+                Some(SERVICE_NAME),
+                &be_object_path(guid),
+                Some(BOOT_ENV_INTERFACE),
+                "Describe",
+                &(description,),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================

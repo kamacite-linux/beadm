@@ -469,6 +469,36 @@ impl Client for EmulatorClient {
         }
         Ok(())
     }
+
+    fn describe(&self, target: &str, description: &str) -> Result<(), Error> {
+        if target.contains('@') {
+            // For mock implementation, we can't actually modify snapshots since
+            // they're generated on-the-fly, but we validate the format and
+            // pretend to succeed.
+
+            // Ensure the boot environment exists
+            let parts: Vec<&str> = target.split('@').collect();
+            if parts.len() != 2 {
+                return Err(Error::InvalidName {
+                    name: target.to_string(),
+                    reason: "too many '@' characters".to_string(),
+                });
+            }
+            let be_name = parts[0];
+            if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
+                return Err(Error::not_found(be_name));
+            }
+            Ok(())
+        } else {
+            let mut bes = self.bes.write().unwrap();
+            if let Some(be) = bes.iter_mut().find(|be| be.name == target) {
+                be.description = Some(description.to_string());
+                Ok(())
+            } else {
+                Err(Error::not_found(target))
+            }
+        }
+    }
 }
 
 fn sample_boot_environments() -> Vec<BootEnvironment> {
@@ -1560,5 +1590,74 @@ mod tests {
         assert!(!temporary.active); // Not the active BE
         assert!(!temporary.next_boot); // Not permanently activated
         assert!(!temporary.boot_once); // Temporary activation cleared
+    }
+
+    #[test]
+    fn test_emulated_describe_boot_environment() {
+        let client = EmulatorClient::sampled();
+
+        // Get initial state
+        let bes = client.get_boot_environments().unwrap();
+        let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
+        assert_eq!(alt_be.description, Some("Testing".to_string()));
+
+        // Change the description
+        let result = client.describe("alt", "Updated description");
+        assert!(result.is_ok());
+
+        // Verify the description was changed
+        let bes = client.get_boot_environments().unwrap();
+        let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
+        assert_eq!(alt_be.description, Some("Updated description".to_string()));
+
+        // Test setting description on boot environment without description
+        let result = client.describe("default", "New description for default");
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments().unwrap();
+        let default_be = bes.iter().find(|be| be.name == "default").unwrap();
+        assert_eq!(
+            default_be.description,
+            Some("New description for default".to_string())
+        );
+    }
+
+    #[test]
+    fn test_emulated_describe_not_found() {
+        let client = EmulatorClient::sampled();
+
+        // Try to describe a non-existent boot environment
+        let result = client.describe("nonexistent", "Some description");
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+    }
+
+    #[test]
+    fn test_emulated_describe_snapshot() {
+        let client = EmulatorClient::sampled();
+
+        // Test describing a snapshot - should succeed (mock implementation validates format)
+        let result = client.describe("default@2021-06-10-04:30", "Updated snapshot description");
+        assert!(result.is_ok());
+
+        // Test describing a snapshot with non-existent BE
+        let result = client.describe("nonexistent@snapshot", "Description");
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
+
+        // Test invalid snapshot format
+        let result = client.describe("default@snap@extra", "Description");
+        assert!(matches!(result, Err(Error::InvalidName { .. })));
+    }
+
+    #[test]
+    fn test_emulated_describe_empty_description() {
+        let client = EmulatorClient::sampled();
+
+        // Test setting empty description
+        let result = client.describe("alt", "");
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments().unwrap();
+        let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
+        assert_eq!(alt_be.description, Some("".to_string()));
     }
 }

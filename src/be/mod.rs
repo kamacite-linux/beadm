@@ -235,6 +235,9 @@ pub trait Client: Send + Sync {
     /// Create the ZFS dataset layout for boot environments. It is not an error
     /// if the required datasets already exist.
     fn init(&self, pool: &str) -> Result<(), Error>;
+
+    /// Set the description for an existing boot environment or snapshot.
+    fn describe(&self, target: &str, description: &str) -> Result<(), Error>;
 }
 
 /// Generate a snapshot name based on the current time.

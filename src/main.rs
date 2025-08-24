@@ -213,6 +213,15 @@ enum Commands {
         /// A new name for the boot environment.
         new_name: String,
     },
+    /// Set a description for an existing boot environment or snapshot.
+    Describe {
+        /// The boot environment or snapshot (in the form 'beName' or
+        /// 'beName@snapshot').
+        target: String,
+
+        /// The description to set.
+        description: String,
+    },
     /// Roll back a boot environment to an earlier snapshot.
     Rollback {
         /// The boot environment.
@@ -699,6 +708,16 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                 .snapshot(source.as_deref(), description.as_deref())
                 .context("Failed to create snapshot")?;
             println!("Created '{}'.", snapshot_name);
+            Ok(())
+        }
+        Commands::Describe {
+            target,
+            description,
+        } => {
+            client
+                .describe(target, description)
+                .context("Failed to set description")?;
+            println!("Set description for '{}'.", target);
             Ok(())
         }
         Commands::Init { pool } => {
