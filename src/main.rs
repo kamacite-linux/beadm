@@ -58,7 +58,7 @@ enum Commands {
         #[arg(short = 't', conflicts_with = "deactivate")]
         temporary: bool,
 
-        /// Removes temporary activation.
+        /// Remove any temporary activations instead.
         #[arg(short = 'T', conflicts_with = "temporary")]
         deactivate: bool,
     },
