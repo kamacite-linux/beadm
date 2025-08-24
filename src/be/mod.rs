@@ -136,7 +136,10 @@ pub enum MountMode {
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "dbus", derive(SerializeDict, DeserializeDict, Type))]
-#[cfg_attr(feature = "dbus", zvariant(signature = "a{sv}", rename_all = "PascalCase"))]
+#[cfg_attr(
+    feature = "dbus",
+    zvariant(signature = "a{sv}", rename_all = "PascalCase")
+)]
 pub struct BootEnvironment {
     /// The name of this boot environment.
     pub name: String,
