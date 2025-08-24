@@ -75,7 +75,11 @@ impl Client for LibZfsClient {
                 // Open the snapshot (which also verifies it exists).
                 Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
                     // Special casing for EZFS_NOENT.
-                    if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                    if let Error::LibzfsError(LibzfsError {
+                        errno: ffi::EZFS_NOENT,
+                        ..
+                    }) = err
+                    {
                         return Error::not_found(src);
                     }
                     err
@@ -88,7 +92,11 @@ impl Client for LibZfsClient {
 
                 Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
                     // Special casing for EZFS_NOENT.
-                    if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                    if let Error::LibzfsError(LibzfsError {
+                        errno: ffi::EZFS_NOENT,
+                        ..
+                    }) = err
+                    {
                         return Error::not_found(src);
                     }
                     err
@@ -118,7 +126,11 @@ impl Client for LibZfsClient {
             .clone(&lzh, &be_path, Some(&clone_props))
             .map_err(|err| {
                 // Special casing for EZFS_EEXIST.
-                if let Error::LibzfsError(LibzfsError { errno: 2008, .. }) = err {
+                if let Error::LibzfsError(LibzfsError {
+                    errno: ffi::EZFS_EEXIST,
+                    ..
+                }) = err
+                {
                     return Error::conflict(be_name);
                 }
                 err
@@ -141,7 +153,11 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         Dataset::create(&lzh, &be_path, &props).map_err(|err| {
             // Special casing for EZFS_EEXIST.
-            if let Error::LibzfsError(LibzfsError { errno: 2008, .. }) = err {
+            if let Error::LibzfsError(LibzfsError {
+                errno: ffi::EZFS_EEXIST,
+                ..
+            }) = err
+            {
                 return Error::conflict(be_name);
             }
             err
@@ -257,7 +273,11 @@ impl Client for LibZfsClient {
             )
             .map_err(|err| {
                 // Special casing for EZFS_EEXIST.
-                if let Error::LibzfsError(LibzfsError { errno: 2008, .. }) = err {
+                if let Error::LibzfsError(LibzfsError {
+                    errno: ffi::EZFS_EEXIST,
+                    ..
+                }) = err
+                {
                     return Error::conflict(new_name);
                 }
                 err
@@ -389,7 +409,11 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
             // Special casing for EZFS_NOENT.
-            if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+            if let Error::LibzfsError(LibzfsError {
+                errno: ffi::EZFS_NOENT,
+                ..
+            }) = err
+            {
                 return Error::not_found(&snapshot_path.basename());
             }
             err
@@ -433,7 +457,10 @@ impl Client for LibZfsClient {
                     }
                 }
             }
-            Err(Error::LibzfsError(LibzfsError { errno: 2009, .. })) => {
+            Err(Error::LibzfsError(LibzfsError {
+                errno: ffi::EZFS_NOENT,
+                ..
+            })) => {
                 // Create it.
                 let props = NvList::from(&[("mountpoint", "none")])?;
                 Dataset::create(&lzh, &root_dataset, &props)?;
@@ -452,7 +479,10 @@ impl Client for LibZfsClient {
                     }
                 }
             }
-            Err(Error::LibzfsError(LibzfsError { errno: 2009, .. })) => {
+            Err(Error::LibzfsError(LibzfsError {
+                errno: ffi::EZFS_NOENT,
+                ..
+            })) => {
                 // Create it.
                 let props = NvList::from(&[("mountpoint", "/home")])?;
                 Dataset::create(&lzh, &home_dataset, &props)?;
@@ -475,7 +505,11 @@ impl Client for LibZfsClient {
             }
             let snapshot_path = self.root.append(parts[0])?.snapshot(parts[1])?;
             let snapshot = Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
-                if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+                if let Error::LibzfsError(LibzfsError {
+                    errno: ffi::EZFS_NOENT,
+                    ..
+                }) = err
+                {
                     return Error::not_found(target);
                 }
                 err
@@ -527,7 +561,11 @@ impl Dataset {
     ) -> Result<Self, Error> {
         Dataset::filesystem(lzh, path).map_err(|err| {
             // Special casing for EZFS_NOENT.
-            if let Error::LibzfsError(LibzfsError { errno: 2009, .. }) = err {
+            if let Error::LibzfsError(LibzfsError {
+                errno: ffi::EZFS_NOENT,
+                ..
+            }) = err
+            {
                 return Error::not_found(be_name);
             }
             err
@@ -1499,7 +1537,7 @@ mod tests {
     #[test]
     fn test_libzfs_error() {
         let libzfs_err = LibzfsError {
-            errno: 2009, // EZFS_NOENT
+            errno: ffi::EZFS_NOENT,
             description: "no such pool or dataset".to_string(),
         };
         let err: Error = libzfs_err.into();
@@ -1632,6 +1670,10 @@ mod ffi {
         pub nounmount: c_uint,    // : 1 bit field
         pub forceunmount: c_uint, // : 1 bit field
     }
+
+    // The subset of error codes in libzfs.h we pay special attention to.
+    pub const EZFS_EEXIST: c_int = 2008;
+    pub const EZFS_NOENT: c_int = 2009;
 
     unsafe extern "C" {
         // Library initialization
