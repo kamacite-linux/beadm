@@ -30,7 +30,7 @@ beadm - Boot Environment Administration
 
 *beadm* *init* _pool_
 
-*beadm* *serve*
+*beadm* *daemon*
 
 # DESCRIPTION
 
@@ -197,7 +197,7 @@ same installation) on a single system.
 	_pool_
 		The ZFS pool to initialize.
 
-*serve*
+*daemon*
 
 	Start the boot environment D-Bus daemon.
 

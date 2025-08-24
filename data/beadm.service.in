@@ -4,5 +4,5 @@ ConditionPathExists=/dev/zfs
 
 [Service]
 BusName=@bus_name@
-ExecStart=@bindir@/beadm serve
+ExecStart=@bindir@/beadm daemon
 Restart=on-failure

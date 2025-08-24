@@ -231,9 +231,9 @@ enum Commands {
         /// The ZFS pool to target.
         pool: String,
     },
-    /// Start the boot environment D-Bus server.
+    /// Start the boot environment D-Bus daemon.
     #[cfg(feature = "dbus")]
-    Serve {
+    Daemon {
         /// Run on the session bus instead of the system bus.
         #[arg(long)]
         user: bool,
@@ -709,7 +709,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             Ok(())
         }
         #[cfg(feature = "dbus")]
-        Commands::Serve { user } => {
+        Commands::Daemon { user } => {
             block_on(serve(client, *user)).context("Failed to start D-Bus service")?;
             Ok(())
         }
