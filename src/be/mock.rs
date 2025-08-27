@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 use super::validation::{validate_be_name, validate_component};
-use super::{BootEnvironment, Client, Error, MountMode, Snapshot, generate_snapshot_name};
+use super::{BootEnvironment, Client, Error, Label, MountMode, Snapshot, generate_snapshot_name};
 
 /// A boot environment client populated with static data that operates
 /// entirely in-memory with no side effects.
@@ -47,7 +47,7 @@ impl Client for EmulatorClient {
         &self,
         be_name: &str,
         description: Option<&str>,
-        source: Option<&str>,
+        source: Option<&Label>,
         _properties: &[String],
     ) -> Result<(), Error> {
         // Validate the boot environment name (like libzfs does via self.root.append())
@@ -56,44 +56,34 @@ impl Client for EmulatorClient {
         let mut bes = self.bes.write().unwrap();
 
         let source_space = match source {
-            Some(src) if src.contains('@') => {
+            Some(Label::Snapshot(name, snapshot)) => {
                 // Case #1: beadm create -e EXISTING@SNAPSHOT NAME, which
                 // creates the clone from an existing snapshot of a boot
                 // environment.
-                let parts: Vec<&str> = src.split('@').collect();
-                if parts.len() != 2 {
-                    return Err(Error::InvalidName {
-                        name: src.to_string(),
-                        reason: "too many '@' characters".to_string(),
-                    });
-                }
 
-                // Validate that be_name is a valid component (not a path)
-                validate_component(parts[0], true)?;
-
-                // Validate that snap_name is a valid component
-                validate_component(parts[1], false)?;
+                validate_component(name, true)?;
+                validate_component(snapshot, false)?;
 
                 // Check if the source boot environment exists
                 let source_be = bes
                     .iter()
-                    .find(|be| be.name == parts[0])
-                    .ok_or_else(|| Error::not_found(src))?;
+                    .find(|be| be.name == *name)
+                    .ok_or_else(|| Error::not_found(&format!("{}@{}", name, snapshot)))?;
 
                 // Clone from snapshot - inherit space from source BE
                 source_be.space
             }
-            Some(src) => {
+            Some(Label::Name(name)) => {
                 // Case #2: beadm create -e EXISTING NAME, which creates the
                 // clone from a new snapshot of a source boot environment.
                 // Validate that src is a valid component (not a path)
-                validate_component(src, true)?;
+                validate_component(name, true)?;
 
                 // Find the source boot environment to clone
                 let source_be = bes
                     .iter()
-                    .find(|be| be.name == src)
-                    .ok_or_else(|| Error::not_found(src))?;
+                    .find(|be| be.name == *name)
+                    .ok_or_else(|| Error::not_found(name))?;
 
                 // Clone from existing BE - inherit space
                 source_be.space
@@ -412,24 +402,16 @@ impl Client for EmulatorClient {
         Ok(sample_snapshots(be_name))
     }
 
-    fn snapshot(&self, source: Option<&str>, _description: Option<&str>) -> Result<String, Error> {
-        let (be_name, snapshot_name) = match source {
-            Some(src) => {
-                if src.contains('@') {
-                    // Form: NAME@SNAPSHOT
-                    let parts: Vec<&str> = src.split('@').collect();
-                    if parts.len() != 2 {
-                        return Err(Error::InvalidName {
-                            name: src.to_string(),
-                            reason: "too many '@' characters".to_string(),
-                        });
-                    }
-                    (parts[0].to_string(), Some(parts[1].to_string()))
-                } else {
-                    // Form: NAME (snapshot name will be auto-generated)
-                    (src.to_string(), None)
-                }
-            }
+    fn snapshot(
+        &self,
+        source: Option<&Label>,
+        _description: Option<&str>,
+    ) -> Result<String, Error> {
+        let (name, snapshot) = match source {
+            Some(label) => match label {
+                Label::Name(name) => (name.clone(), generate_snapshot_name()),
+                Label::Snapshot(name, snapshot) => (name.clone(), snapshot.clone()),
+            },
             None => {
                 // Form: beadm snapshot (snapshot active BE with auto-generated name)
                 let bes = self.bes.read().unwrap();
@@ -437,25 +419,19 @@ impl Client for EmulatorClient {
                     .iter()
                     .find(|be| be.active)
                     .ok_or_else(|| Error::NoActiveBootEnvironment)?;
-                (active_be.name.clone(), None)
+                (active_be.name.clone(), generate_snapshot_name())
             }
         };
 
         // Ensure the boot environment exists
-        if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
-            return Err(Error::not_found(&be_name));
+        if !self.bes.read().unwrap().iter().any(|be| be.name == name) {
+            return Err(Error::not_found(&name));
         }
-
-        let snapshot_name = match snapshot_name {
-            Some(name) => name,
-            // Same format as the libzfs client.
-            None => generate_snapshot_name(),
-        };
 
         // In a real implementation, we would add the snapshot to storage with the
         // description, but for the mock client we just validate and return the name.
         // The description parameter is accepted but ignored in the mock.
-        Ok(format!("{}@{}", be_name, snapshot_name))
+        Ok(format!("{}@{}", name, snapshot))
     }
 
     fn init(&self, pool: &str) -> Result<(), Error> {
@@ -470,32 +446,25 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn describe(&self, target: &str, description: &str) -> Result<(), Error> {
-        if target.contains('@') {
-            // For mock implementation, we can't actually modify snapshots since
-            // they're generated on-the-fly, but we validate the format and
-            // pretend to succeed.
-
-            // Ensure the boot environment exists
-            let parts: Vec<&str> = target.split('@').collect();
-            if parts.len() != 2 {
-                return Err(Error::InvalidName {
-                    name: target.to_string(),
-                    reason: "too many '@' characters".to_string(),
-                });
-            }
-            let be_name = parts[0];
-            if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
-                return Err(Error::not_found(be_name));
-            }
-            Ok(())
-        } else {
-            let mut bes = self.bes.write().unwrap();
-            if let Some(be) = bes.iter_mut().find(|be| be.name == target) {
-                be.description = Some(description.to_string());
+    fn describe(&self, target: &Label, description: &str) -> Result<(), Error> {
+        match target {
+            Label::Snapshot(name, _snapshot) => {
+                // For mock implementation, we can't actually modify snapshots
+                // since they're generated on-the-fly, but we validate at least
+                // that the boot environment exists and then pretend to succeed.
+                if !self.bes.read().unwrap().iter().any(|be| be.name == *name) {
+                    return Err(Error::not_found(name));
+                }
                 Ok(())
-            } else {
-                Err(Error::not_found(target))
+            }
+            Label::Name(name) => {
+                let mut bes = self.bes.write().unwrap();
+                if let Some(be) = bes.iter_mut().find(|be| be.name == *name) {
+                    be.description = Some(description.to_string());
+                    Ok(())
+                } else {
+                    Err(Error::not_found(name))
+                }
             }
         }
     }
@@ -562,6 +531,7 @@ fn sample_snapshots(be_name: &str) -> Vec<Snapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_emulated_new() {
@@ -1327,7 +1297,7 @@ mod tests {
         let result = client.create(
             "from-default",
             Some("Cloned from default"),
-            Some("default"),
+            Some(&Label::from_str("default").unwrap()),
             &[],
         );
         assert!(result.is_ok());
@@ -1348,7 +1318,7 @@ mod tests {
         let result = client.create(
             "from-snapshot",
             Some("From snapshot"),
-            Some("default@2021-06-10-04:30"),
+            Some(&Label::from_str("default@2021-06-10-04:30").unwrap()),
             &[],
         );
         assert!(result.is_ok());
@@ -1382,21 +1352,31 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Try to create from non-existent BE
-        let result = client.create("from-nonexistent", None, Some("nonexistent"), &[]);
+        let result = client.create(
+            "from-nonexistent",
+            None,
+            Some(&Label::from_str("nonexistent").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
 
         // Try to create from non-existent snapshot
-        let result = client.create("from-bad-snapshot", None, Some("nonexistent@snap"), &[]);
+        let result = client.create(
+            "from-bad-snapshot",
+            None,
+            Some(&Label::from_str("nonexistent@snap").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::NotFound { .. })));
     }
 
     #[test]
     fn test_emulated_create_invalid_snapshot_format() {
-        let client = EmulatorClient::sampled();
+        let _client = EmulatorClient::sampled();
 
-        // Try to create from invalid snapshot format
-        let result = client.create("from-invalid", None, Some("default@snap@extra"), &[]);
-        assert!(matches!(result, Err(Error::InvalidName { .. })));
+        // Try to create from invalid snapshot format - this should fail at parse time
+        let parse_result = Label::from_str("default@snap@extra");
+        assert!(matches!(parse_result, Err(Error::InvalidName { .. })));
     }
 
     #[test]
@@ -1404,27 +1384,57 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Try to create from source with invalid characters (path-like)
-        let result = client.create("new-be", None, Some("zroot/ROOT/default"), &[]);
+        let result = client.create(
+            "new-be",
+            None,
+            Some(&Label::from_str("zroot/ROOT/default").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
         // Try to create from source with invalid component name
-        let result = client.create("new-be", None, Some("-invalid"), &[]);
+        let result = client.create(
+            "new-be",
+            None,
+            Some(&Label::from_str("-invalid").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
         // Try to create from snapshot with invalid BE component
-        let result = client.create("new-be", None, Some("zroot/ROOT/default@snap"), &[]);
+        let result = client.create(
+            "new-be",
+            None,
+            Some(&Label::from_str("zroot/ROOT/default@snap").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
         // Try to create from snapshot with invalid snapshot component
-        let result = client.create("new-be", None, Some("default@invalid#name"), &[]);
+        let result = client.create(
+            "new-be",
+            None,
+            Some(&Label::from_str("default@invalid#name").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
         // Try to create from snapshot with space in BE name
-        let result = client.create("new-be", None, Some("invalid name@snap"), &[]);
+        let result = client.create(
+            "new-be",
+            None,
+            Some(&Label::from_str("invalid name@snap").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
         // Try to create from snapshot with space in snapshot name
-        let result = client.create("new-be", None, Some("default@invalid snap"), &[]);
+        let result = client.create(
+            "new-be",
+            None,
+            Some(&Label::from_str("default@invalid snap").unwrap()),
+            &[],
+        );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
     }
 
@@ -1602,7 +1612,8 @@ mod tests {
         assert_eq!(alt_be.description, Some("Testing".to_string()));
 
         // Change the description
-        let result = client.describe("alt", "Updated description");
+        let target = Label::from_str("alt").unwrap();
+        let result = client.describe(&target, "Updated description");
         assert!(result.is_ok());
 
         // Verify the description was changed
@@ -1611,7 +1622,8 @@ mod tests {
         assert_eq!(alt_be.description, Some("Updated description".to_string()));
 
         // Test setting description on boot environment without description
-        let result = client.describe("default", "New description for default");
+        let target = Label::from_str("default").unwrap();
+        let result = client.describe(&target, "New description for default");
         assert!(result.is_ok());
 
         let bes = client.get_boot_environments().unwrap();
@@ -1627,7 +1639,8 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Try to describe a non-existent boot environment
-        let result = client.describe("nonexistent", "Some description");
+        let target = Label::from_str("nonexistent").unwrap();
+        let result = client.describe(&target, "Some description");
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -1636,16 +1649,17 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Test describing a snapshot - should succeed (mock implementation validates format)
-        let result = client.describe("default@2021-06-10-04:30", "Updated snapshot description");
+        let target = Label::from_str("default@2021-06-10-04:30").unwrap();
+        let result = client.describe(&target, "Updated snapshot description");
         assert!(result.is_ok());
 
         // Test describing a snapshot with non-existent BE
-        let result = client.describe("nonexistent@snapshot", "Description");
+        let target = Label::from_str("nonexistent@snapshot").unwrap();
+        let result = client.describe(&target, "Description");
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
 
-        // Test invalid snapshot format
-        let result = client.describe("default@snap@extra", "Description");
-        assert!(matches!(result, Err(Error::InvalidName { .. })));
+        // Note: Invalid snapshot formats like "default@snap@extra" are now handled
+        // by Target::FromStr during parsing, so this test is no longer needed here.
     }
 
     #[test]
@@ -1653,7 +1667,8 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Test setting empty description
-        let result = client.describe("alt", "");
+        let target = Label::from_str("alt").unwrap();
+        let result = client.describe(&target, "");
         assert!(result.is_ok());
 
         let bes = client.get_boot_environments().unwrap();

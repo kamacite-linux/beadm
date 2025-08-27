@@ -1,5 +1,5 @@
 use crate::be::Error as BeError;
-use crate::be::{BootEnvironment, Client, MountMode, Snapshot};
+use crate::be::{BootEnvironment, Client, Label, MountMode, Snapshot};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -50,11 +50,11 @@ impl Client for ClientProxy {
         &self,
         be_name: &str,
         description: Option<&str>,
-        source: Option<&str>,
+        source: Option<&Label>,
         properties: &[String],
     ) -> Result<(), BeError> {
         let desc = description.unwrap_or("");
-        let src = source.unwrap_or("");
+        let src = source.map(|label| label.to_string()).unwrap_or_default();
         let props: Vec<String> = properties.to_vec();
 
         let _result: String = self
@@ -277,8 +277,8 @@ impl Client for ClientProxy {
         Ok(snapshots)
     }
 
-    fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, BeError> {
-        let src = source.unwrap_or("");
+    fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, BeError> {
+        let src = source.map(|label| label.to_string()).unwrap_or_default();
         let desc = description.unwrap_or("");
         let result: String = self
             .connection
@@ -309,25 +309,29 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn describe(&self, target: &str, description: &str) -> Result<(), BeError> {
-        if target.contains('@') {
-            // TODO: Actually implement this on the server side.
-            self.connection.call_method(
-                Some(SERVICE_NAME),
-                BOOT_ENV_PATH,
-                Some(MANAGER_INTERFACE),
-                "Describe",
-                &(target, description),
-            )?;
-        } else {
-            let guid = self.get_be_guid(target)?;
-            self.connection.call_method(
-                Some(SERVICE_NAME),
-                &be_object_path(guid),
-                Some(BOOT_ENV_INTERFACE),
-                "Describe",
-                &(description,),
-            )?;
+    fn describe(&self, target: &Label, description: &str) -> Result<(), BeError> {
+        // TODO: Actually implement this on the server side.
+        match target {
+            Label::Snapshot(name, snapshot) => {
+                let target_str = format!("{}@{}", name, snapshot);
+                self.connection.call_method(
+                    Some(SERVICE_NAME),
+                    BOOT_ENV_PATH,
+                    Some(MANAGER_INTERFACE),
+                    "Describe",
+                    &(target_str, description),
+                )?;
+            }
+            Label::Name(name) => {
+                let guid = self.get_be_guid(name)?;
+                self.connection.call_method(
+                    Some(SERVICE_NAME),
+                    &be_object_path(guid),
+                    Some(BOOT_ENV_INTERFACE),
+                    "Describe",
+                    &(description,),
+                )?;
+            }
         }
         Ok(())
     }
@@ -577,12 +581,12 @@ impl BootEnvironmentObject {
     /// Create a snapshot of this boot environment
     fn snapshot(&self, snapshot_name: &str) -> zbus::fdo::Result<String> {
         let be_name = &self.data.read().unwrap().name;
-        let target = if snapshot_name.is_empty() {
-            be_name.clone()
+        let label = if snapshot_name.is_empty() {
+            Label::Name(be_name.clone())
         } else {
-            format!("{}@{}", be_name, snapshot_name)
+            Label::Snapshot(be_name.clone(), snapshot_name.to_string())
         };
-        let result = self.client.snapshot(Some(&target), None)?;
+        let result = self.client.snapshot(Some(&label), None)?;
         Ok(result)
     }
 }
@@ -697,10 +701,10 @@ impl BootEnvironmentManager {
         let src = if source.is_empty() {
             None
         } else {
-            Some(source)
+            Some(source.parse::<Label>()?)
         };
 
-        self.client.create(name, desc, src, &properties)?;
+        self.client.create(name, desc, src.as_ref(), &properties)?;
 
         // Get the newly created BE to find its GUID
         let bes = self.client.get_boot_environments()?;
@@ -756,14 +760,14 @@ impl BootEnvironmentManager {
         let target_opt = if target.is_empty() {
             None
         } else {
-            Some(target)
+            Some(target.parse::<Label>()?)
         };
         let desc_opt = if description.is_empty() {
             None
         } else {
             Some(description)
         };
-        let result = self.client.snapshot(target_opt, desc_opt)?;
+        let result = self.client.snapshot(target_opt.as_ref(), desc_opt)?;
         Ok(result)
     }
 

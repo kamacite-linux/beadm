@@ -14,7 +14,7 @@ mod hooks;
 
 use be::mock::EmulatorClient;
 use be::zfs::{DatasetName, LibZfsClient, format_zfs_bytes, get_active_boot_environment_root};
-use be::{BootEnvironment, Client, Error, MountMode, Snapshot};
+use be::{BootEnvironment, Client, Error, Label, MountMode, Snapshot};
 #[cfg(feature = "dbus")]
 use dbus::{ClientProxy, serve};
 
@@ -82,7 +82,7 @@ enum Commands {
         /// Create the new boot environment from this boot environment or
         /// snapshot, rather than the active one.
         #[arg(short = 'e', conflicts_with = "empty")]
-        source: Option<String>,
+        source: Option<Label>,
 
         /// Set additional ZFS properties for the new boot environment (in
         /// 'property=value' format).
@@ -117,7 +117,7 @@ enum Commands {
         ///
         /// When the snapshot name is omitted, one will be generated
         /// automatically from the current time.
-        source: Option<String>,
+        source: Option<Label>,
 
         /// An optional description for the snapshot.
         #[arg(short = 'd')]
@@ -217,7 +217,7 @@ enum Commands {
     Describe {
         /// The boot environment or snapshot (in the form 'beName' or
         /// 'beName@snapshot').
-        target: String,
+        target: Label,
 
         /// The description to set.
         description: String,
@@ -553,7 +553,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             }
 
             client
-                .create(be_name, description.as_deref(), source.as_deref(), property)
+                .create(be_name, description.as_deref(), source.as_ref(), property)
                 .context("Failed to create boot environment")?;
             if *activate || *temp_activate {
                 client
@@ -705,7 +705,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             description,
         } => {
             let snapshot_name = client
-                .snapshot(source.as_deref(), description.as_deref())
+                .snapshot(source.as_ref(), description.as_deref())
                 .context("Failed to create snapshot")?;
             println!("Created '{}'.", snapshot_name);
             Ok(())
@@ -715,7 +715,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             description,
         } => {
             client
-                .describe(target, description)
+                .describe(&target, description)
                 .context("Failed to set description")?;
             println!("Set description for '{}'.", target);
             Ok(())

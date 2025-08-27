@@ -179,12 +179,67 @@ pub struct Snapshot {
     pub created: i64,
 }
 
+/// Represents either a named boot environment or a snapshot of one. Used for
+/// operations that are valid for either.
+#[derive(Debug, Clone)]
+pub enum Label {
+    /// A named boot environment.
+    Name(String),
+    /// A snapshot of a named boot environment.
+    Snapshot(String, String),
+}
+
+impl std::str::FromStr for Label {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((name, snapshot)) = s.split_once('@') {
+            if name.is_empty() {
+                return Err(Error::InvalidName {
+                    name: s.to_string(),
+                    reason: "boot environment name cannot be empty".to_string(),
+                });
+            }
+            if snapshot.is_empty() {
+                return Err(Error::InvalidName {
+                    name: s.to_string(),
+                    reason: "snapshot name cannot be empty".to_string(),
+                });
+            }
+            if snapshot.contains("@") {
+                return Err(Error::InvalidName {
+                    name: s.to_string(),
+                    reason: "too many '@' characters".to_string(),
+                });
+            }
+            Ok(Label::Snapshot(name.to_string(), snapshot.to_string()))
+        } else {
+            if s.is_empty() {
+                return Err(Error::InvalidName {
+                    name: s.to_string(),
+                    reason: "boot environment name cannot be empty".to_string(),
+                });
+            }
+            Ok(Label::Name(s.to_string()))
+        }
+    }
+}
+
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Label::Name(name) => write!(f, "{}", name),
+            Label::Snapshot(name, snapshot) => write!(f, "{}@{}", name, snapshot),
+        }
+    }
+}
+
 pub trait Client: Send + Sync {
     fn create(
         &self,
         be_name: &str,
         description: Option<&str>,
-        source: Option<&str>,
+        source: Option<&Label>,
         properties: &[String],
     ) -> Result<(), Error>;
 
@@ -225,22 +280,18 @@ pub trait Client: Send + Sync {
     /// Get snapshots for a specific boot environment.
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error>;
 
-    /// Create a snapshot of a boot environment.
-    ///
-    /// The source can be:
-    /// - None: Snapshot the active boot environment with auto-generated name.
-    /// - Some("NAME"): Snapshot the specified BE with auto-generated name.
-    /// - Some("NAME@SNAPSHOT"): Snapshot the specified BE with custom name.
+    /// Create a snapshot of a source boot environment. When `source` is None,
+    /// snapshot the active boot environment.
     ///
     /// Returns the final snapshot name (e.g. `be@snapshot`).
-    fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, Error>;
+    fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, Error>;
 
     /// Create the ZFS dataset layout for boot environments. It is not an error
     /// if the required datasets already exist.
     fn init(&self, pool: &str) -> Result<(), Error>;
 
     /// Set the description for an existing boot environment or snapshot.
-    fn describe(&self, target: &str, description: &str) -> Result<(), Error>;
+    fn describe(&self, target: &Label, description: &str) -> Result<(), Error>;
 }
 
 /// Generate a snapshot name based on the current time.

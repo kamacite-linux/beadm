@@ -7,7 +7,7 @@ use std::ptr;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use super::validation::{validate_component, validate_dataset_name};
-use super::{BootEnvironment, Client, Error, MountMode, Snapshot, generate_snapshot_name};
+use super::{BootEnvironment, Client, Error, Label, MountMode, Snapshot, generate_snapshot_name};
 
 const DESCRIPTION_PROP: &str = "ca.kamacite:description";
 const PREVIOUS_BOOTFS_PROP: &str = "ca.kamacite:previous-bootfs";
@@ -43,7 +43,7 @@ impl Client for LibZfsClient {
         &self,
         be_name: &str,
         description: Option<&str>,
-        source: Option<&str>,
+        source: Option<&Label>,
         _properties: &[String],
     ) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
@@ -57,20 +57,13 @@ impl Client for LibZfsClient {
         };
 
         let snapshot = match source {
-            Some(src) if src.contains('@') => {
+            Some(Label::Snapshot(name, snapshot)) => {
                 // Case #1: beadm create -e EXISTING@SNAPSHOT NAME, which
                 // creates the clone from an existing snapshot of a boot
                 // environment.
-                let parts: Vec<&str> = src.split('@').collect();
-                if parts.len() != 2 {
-                    return Err(Error::InvalidName {
-                        name: src.to_string(),
-                        reason: "too many '@' characters".to_string(),
-                    });
-                }
 
                 // Build the full snapshot path (which handles validation).
-                let snapshot_path = self.root.append(parts[0])?.snapshot(parts[1])?;
+                let snapshot_path = self.root.append(name)?.snapshot(snapshot)?;
 
                 // Open the snapshot (which also verifies it exists).
                 Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
@@ -80,15 +73,15 @@ impl Client for LibZfsClient {
                         ..
                     }) = err
                     {
-                        return Error::not_found(src);
+                        return Error::not_found(&format!("{}@{}", name, snapshot));
                     }
                     err
                 })
             }
-            Some(src) => {
+            Some(Label::Name(name)) => {
                 // Case #2: beadm create -e EXISTING NAME, which creates the
                 // clone from a new snapshot of a source boot environment.
-                let snapshot_path = self.root.append(src)?.generate_snapshot()?;
+                let snapshot_path = self.root.append(name)?.generate_snapshot()?;
 
                 Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
                     // Special casing for EZFS_NOENT.
@@ -97,7 +90,7 @@ impl Client for LibZfsClient {
                         ..
                     }) = err
                     {
-                        return Error::not_found(src);
+                        return Error::not_found(name);
                     }
                     err
                 })
@@ -379,24 +372,18 @@ impl Client for LibZfsClient {
         Ok(snapshots)
     }
 
-    fn snapshot(&self, source: Option<&str>, description: Option<&str>) -> Result<String, Error> {
+    fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, Error> {
         let snapshot_path = match source {
-            Some(src) if src.contains('@') => {
-                let parts: Vec<&str> = src.split('@').collect();
-                if parts.len() != 2 {
-                    return Err(Error::InvalidName {
-                        name: src.to_string(),
-                        reason: "too many '@' characters".to_string(),
-                    });
-                }
-
-                // Build the full snapshot path (which handles validation).
-                self.root.append(parts[0])?.snapshot(parts[1])
+            Some(label) => match label {
+                Label::Name(name) => self.root.append(name)?.generate_snapshot(),
+                Label::Snapshot(name, snapshot) => self.root.append(name)?.snapshot(snapshot),
+            },
+            None => {
+                // Snapshot the active boot environment with auto-generated name
+                get_rootfs()?
+                    .ok_or_else(|| Error::NoActiveBootEnvironment)?
+                    .generate_snapshot()
             }
-            Some(src) => self.root.append(src)?.generate_snapshot(),
-            None => get_rootfs()?
-                .ok_or_else(|| Error::NoActiveBootEnvironment)?
-                .generate_snapshot(),
         }?;
 
         // Pass the description (if provided) as a snapshot property.
@@ -493,33 +480,28 @@ impl Client for LibZfsClient {
         Ok(())
     }
 
-    fn describe(&self, target: &str, description: &str) -> Result<(), Error> {
+    fn describe(&self, target: &Label, description: &str) -> Result<(), Error> {
         let lzh = LibHandle::get();
-        if target.contains('@') {
-            let parts: Vec<&str> = target.split('@').collect();
-            if parts.len() != 2 {
-                return Err(Error::InvalidName {
-                    name: target.to_string(),
-                    reason: "too many '@' characters".to_string(),
-                });
+        let dataset = match target {
+            Label::Snapshot(name, snapshot) => {
+                let dataset_path = self.root.append(name)?.snapshot(snapshot)?;
+                Dataset::snapshot(&lzh, &dataset_path).map_err(|err| {
+                    if let Error::LibzfsError(LibzfsError {
+                        errno: ffi::EZFS_NOENT,
+                        ..
+                    }) = err
+                    {
+                        return Error::not_found(&format!("{}", target));
+                    }
+                    err
+                })?
             }
-            let snapshot_path = self.root.append(parts[0])?.snapshot(parts[1])?;
-            let snapshot = Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
-                if let Error::LibzfsError(LibzfsError {
-                    errno: ffi::EZFS_NOENT,
-                    ..
-                }) = err
-                {
-                    return Error::not_found(target);
-                }
-                err
-            })?;
-            snapshot.set_property(&lzh, DESCRIPTION_PROP, description)
-        } else {
-            let dataset_path = self.root.append(target)?;
-            let dataset = Dataset::boot_environment(&lzh, target, &dataset_path)?;
-            dataset.set_property(&lzh, DESCRIPTION_PROP, description)
-        }
+            Label::Name(name) => {
+                let dataset_path = self.root.append(name)?;
+                Dataset::boot_environment(&lzh, name, &dataset_path)?
+            }
+        };
+        dataset.set_property(&lzh, DESCRIPTION_PROP, description)
     }
 }
 
