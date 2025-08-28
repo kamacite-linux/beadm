@@ -80,9 +80,9 @@ same installation) on a single system.
 	Create a snapshot of a boot environment.
 
 	_name_ | _name@snapshot_
-		The boot environment and optional snapshot name (in the form _name_ or
-		_name@snapshot_). When the snapshot name is omitted, one will be generated
-		automatically from the current time.
+		The boot environment and optional snapshot name. When the snapshot name is
+		omitted, one will be generated automatically from the current time. When
+		both are omitted, a snapshot is taken of the active boot environment.
 
 	*-d* _desc_
 		Set a description for the snapshot.
@@ -92,8 +92,7 @@ same installation) on a single system.
 	Destroy an existing boot environment or snapshot.
 
 	_name_ | _name@snapshot_
-		The boot environment or snapshot to destroy (in the form _name_ or
-		_name@snapshot_).
+		The boot environment or snapshot to destroy.
 
 	*-f*
 		Forcefully unmount the boot environment if needed.
@@ -168,8 +167,7 @@ same installation) on a single system.
 	Set a description for a boot environment or snapshot.
 
 	_name_ | _name@snapshot_
-		The boot environment or snapshot to describe (in the form _name_ or
-		_name@snapshot_).
+		The boot environment or snapshot to describe.
 
 	_desc_
 		The description to set.
