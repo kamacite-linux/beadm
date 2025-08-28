@@ -90,6 +90,19 @@ if enable_dinit
         summary('service_dir', service_dir)
 endif
 
+apk_conf_dir = '/' / get_option('sysconfdir') / 'apk'
+has_apk = import('fs').is_dir(apk_conf_dir)
+
+enable_apk_hook = get_option('apk-hook').auto() and has_apk
+if get_option('apk-hook').enabled()
+        enable_apk_hook = true
+endif
+
+if enable_apk_hook
+        apk_hooks_dir = apk_conf_dir / 'commit_hooks.d'
+        summary('apk hooks', apk_hooks_dir)
+endif
+
 # Configuration data -----------------------------------------------------------
 
 bus_name = 'ca.kamacite.BootEnvironments1'

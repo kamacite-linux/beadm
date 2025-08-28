@@ -64,5 +64,17 @@ if enable_apt_hook
         install_data(apt_hook_conf, install_dir : apt_hooks_dir)
 endif
 
+# APK hook configuration.
+if enable_apk_hook
+        apk_hook = configure_file(
+                configuration : conf,
+                input : 'apk-commit-hook.in',
+                output : 'beadm')
+
+        install_data(apk_hook,
+                     install_dir : apk_hooks_dir,
+                     install_mode : 'rwxr--r--')
+endif
+
 # install_data('ca.kamacite.BootEnvironments1.policy',
 #              install_dir : polkit_actions_dir)

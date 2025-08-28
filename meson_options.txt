@@ -19,3 +19,8 @@ option('dinit',
        type : 'feature',
        value : 'auto',
        description : 'Enable Dinit support')
+
+option('apk-hook',
+       type : 'feature',
+       value : 'auto',
+       description : 'Enable APK integration')
