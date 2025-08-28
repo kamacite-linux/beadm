@@ -1,6 +1,6 @@
 # -*- meson-indent-basic: 8 -*-
 
-if get_option('systemd').allowed()
+if enable_systemd
         # "Clear boot once" oneshot service
         clear_boot_once_service = configure_file(
                 configuration : conf,
@@ -10,7 +10,7 @@ if get_option('systemd').allowed()
         install_data(clear_boot_once_service, install_dir : unit_dir)
 endif
 
-if get_option('systemd').allowed() and get_option('dbus').allowed()
+if enable_systemd and get_option('dbus').allowed()
         # Unit file
         systemd_service = configure_file(
                 configuration : conf,

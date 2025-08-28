@@ -30,7 +30,9 @@ summary({
         'buildtype': get_option('buildtype'),
 })
 
+enable_systemd = false
 if get_option('systemd').allowed() and systemd_dep.found()
+        enable_systemd = true
         unit_dir = systemd_dep.get_variable(
                 pkgconfig: 'systemdsystemunitdir',
                 pkgconfig_define: ['prefix', prefix]
