@@ -6,32 +6,20 @@ beadm - Boot Environment Administration
 
 # SYNOPSIS
 
-*beadm* *activate* _name_ | *-t* _name_ | *-T*
-
+*beadm* *activate* _name_ | *-t* _name_ | *-T* ++
 *beadm* *create* [*-a* | *-t*] [*-d* _desc_] [*-o* _property=value_]
 	\[*-e* _source_] _name_
-
 *beadm* *create* [*-a* | *-t*] [*-d* _desc_] [*-o* _property=value_]
 	\[*--use-os-release* _file_] *--empty* _name_
-
-*beadm* *snapshot* [*-d* _desc_] [_name_ | _name@snapshot_]
-
-*beadm* *destroy* [*-fs*] _name_ | _name@snapshot_
-
-*beadm* *list* [*-adsH*] [*-k* _property_ | *-K* _property_] [_name_]
-
-*beadm* *mount* [*-s* _mode_] _name_ [_mountpoint_]
-
-*beadm* *unmount* [*-f*] _name_
-
-*beadm* *rename* _name_ _new-name_
-
-*beadm* *describe* _name_ | _name@snapshot_ _desc_
-
-*beadm* *rollback* _name_ _snapshot_
-
-*beadm* *init* _pool_
-
+*beadm* *snapshot* [*-d* _desc_] [_name_ | _name@snapshot_] ++
+*beadm* *destroy* [*-fs*] _name_ | _name@snapshot_ ++
+*beadm* *list* [*-adsH*] [*-k* _property_ | *-K* _property_] [_name_] ++
+*beadm* *mount* [*-s* _mode_] _name_ [_mountpoint_] ++
+*beadm* *unmount* [*-f*] _name_ ++
+*beadm* *rename* _name_ _new-name_ ++
+*beadm* *describe* _name_ | _name@snapshot_ _desc_ ++
+*beadm* *rollback* _name_ _snapshot_ ++
+*beadm* *init* _pool_ ++
 *beadm* *daemon*
 
 # DESCRIPTION
