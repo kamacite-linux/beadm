@@ -18,12 +18,14 @@ systemd_dep = dependency('systemd', version : '>= 242', required : get_option('s
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
+libdir = prefix / get_option('libdir')
 mandir = prefix / get_option('mandir')
 
 summary({
         'prefix' : prefix,
         'bindir' : bindir,
         'datadir' : datadir,
+        'libdir' : libdir,
         'mandir' : mandir,
         'opt': get_option('optimization'),
         'debug': get_option('debug'),
@@ -73,6 +75,19 @@ endif
 if enable_apt_hook
         apt_hooks_dir = apt_conf_dir / 'apt.conf.d'
         summary('apt hooks', apt_hooks_dir)
+endif
+
+dinit_conf_dir = '/' / get_option('sysconfdir') / 'dinit.d'
+has_dinit = import('fs').is_dir(dinit_conf_dir)
+
+enable_dinit = get_option('dinit').auto() and has_dinit
+if get_option('dinit').enabled()
+        enable_dinit_hook = true
+endif
+
+if enable_dinit
+        service_dir = libdir / 'dinit.d'
+        summary('service_dir', service_dir)
 endif
 
 # Configuration data -----------------------------------------------------------

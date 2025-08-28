@@ -14,3 +14,8 @@ option('apt-hook',
        type : 'feature',
        value : 'auto',
        description : 'Enable APT integration')
+
+option('dinit',
+       type : 'feature',
+       value : 'auto',
+       description : 'Enable Dinit support')

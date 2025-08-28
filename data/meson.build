@@ -8,6 +8,14 @@ if enable_systemd
                 output : '@BASENAME@')
 
         install_data(clear_boot_once_service, install_dir : unit_dir)
+elif enable_dinit
+        # "Clear boot once" dinit service
+        clear_boot_once_service = configure_file(
+                configuration : conf,
+                input : 'beadm-clear-boot-once-dinit.in',
+                output : 'beadm-clear-boot-once')
+
+        install_data(clear_boot_once_service, install_dir : service_dir)
 endif
 
 if enable_systemd and get_option('dbus').allowed()
