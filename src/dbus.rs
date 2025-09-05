@@ -557,11 +557,13 @@ impl BootEnvironmentObject {
             .collect())
     }
 
-    /// Get host ID for this boot environment
-    fn get_hostid(&self) -> zbus::fdo::Result<u32> {
-        let hostid = self.client.hostid(&self.data.read().unwrap().name)?;
-        Ok(hostid.unwrap_or(0))
-    }
+    // TODO: This is probably not useful, so hide it for now.
+
+    // /// Get host ID for this boot environment
+    // fn get_hostid(&self) -> zbus::fdo::Result<u32> {
+    //     let hostid = self.client.hostid(&self.data.read().unwrap().name)?;
+    //     Ok(hostid.unwrap_or(0))
+    // }
 
     /// Create a snapshot of this boot environment
     fn snapshot(&self, snapshot_name: &str) -> zbus::fdo::Result<String> {
