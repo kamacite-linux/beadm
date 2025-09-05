@@ -566,14 +566,20 @@ impl BootEnvironmentObject {
     // }
 
     /// Create a snapshot of this boot environment
-    fn snapshot(&self, snapshot_name: &str) -> zbus::fdo::Result<String> {
+    #[zbus(out_args("snapshot"))]
+    fn snapshot(&self, snapshot_name: &str, description: &str) -> zbus::fdo::Result<String> {
         let be_name = &self.data.read().unwrap().name;
         let label = if snapshot_name.is_empty() {
             Label::Name(be_name.clone())
         } else {
             Label::Snapshot(be_name.clone(), snapshot_name.to_string())
         };
-        let result = self.client.snapshot(Some(&label), None)?;
+        let desc = if !description.is_empty() {
+            Some(description)
+        } else {
+            None
+        };
+        let result = self.client.snapshot(Some(&label), desc)?;
         Ok(result)
     }
 }
