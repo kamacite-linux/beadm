@@ -304,29 +304,14 @@ impl Client for ClientProxy {
     }
 
     fn describe(&self, target: &Label, description: &str) -> Result<(), BeError> {
-        // TODO: Actually implement this on the server side.
-        match target {
-            Label::Snapshot(name, snapshot) => {
-                let target_str = format!("{}@{}", name, snapshot);
-                self.connection.call_method(
-                    Some(SERVICE_NAME),
-                    BOOT_ENV_PATH,
-                    Some(MANAGER_INTERFACE),
-                    "Describe",
-                    &(target_str, description),
-                )?;
-            }
-            Label::Name(name) => {
-                let guid = self.get_be_guid(name)?;
-                self.connection.call_method(
-                    Some(SERVICE_NAME),
-                    &be_object_path(guid),
-                    Some(BOOT_ENV_INTERFACE),
-                    "Describe",
-                    &(description,),
-                )?;
-            }
-        }
+        let target_str = target.to_string();
+        self.connection.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "Describe",
+            &(target_str, description),
+        )?;
         Ok(())
     }
 }
@@ -582,6 +567,14 @@ impl BootEnvironmentObject {
         let result = self.client.snapshot(Some(&label), desc)?;
         Ok(result)
     }
+
+    /// Set a description for this boot environment.
+    fn describe(&self, description: &str) -> zbus::fdo::Result<()> {
+        let be_name = &self.data.read().unwrap().name;
+        self.client
+            .describe(&Label::Name(be_name.clone()), description)?;
+        Ok(())
+    }
 }
 
 /// Main beadm manager implementing ObjectManager
@@ -767,6 +760,13 @@ impl BootEnvironmentManager {
     /// Create the ZFS dataset layout for boot environments.
     fn init(&self, pool: &str) -> zbus::fdo::Result<()> {
         self.client.init(pool)?;
+        Ok(())
+    }
+
+    /// Set a description for an existing boot environment or snapshot.
+    fn describe(&self, target: &str, description: &str) -> zbus::fdo::Result<()> {
+        let label = target.parse::<Label>()?;
+        self.client.describe(&label, description)?;
         Ok(())
     }
 }
