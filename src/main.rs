@@ -530,6 +530,9 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             host_id,
             use_os_release,
         } => {
+            if !property.is_empty() {
+                anyhow::bail!("Setting boot environment properties (via -o) is not yet supported.");
+            }
             if *empty {
                 let final_description = if let Some(os_release_path) = use_os_release {
                     Some(parse_os_release_pretty_name(os_release_path)?)
@@ -586,14 +589,16 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         }
         Commands::List {
             be_name,
-            all: _,
-            datasets: _,
+            all,
+            datasets,
             snapshots,
             parseable,
             sort_asc,
             sort_des,
         } => {
-            // TODO: Implement -a, -d.
+            if *all || *datasets {
+                anyhow::bail!("Listing datasets (via -a or -d) is not yet supported.");
+            }
 
             let sort_field = sort_des.unwrap_or(*sort_asc);
             let options = PrintOptions {
