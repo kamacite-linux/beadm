@@ -34,15 +34,6 @@ impl ClientProxy {
             connection: connection.into(),
         })
     }
-
-    /// Get the GUID for a boot environment by name
-    fn get_be_guid(&self, be_name: &str) -> Result<u64, BeError> {
-        let bes = self.get_boot_environments()?;
-        bes.into_iter()
-            .find(|be| be.name == be_name)
-            .map(|be| be.guid)
-            .ok_or_else(|| BeError::not_found(be_name))
-    }
 }
 
 impl Client for ClientProxy {
@@ -99,13 +90,12 @@ impl Client for ClientProxy {
     }
 
     fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> Result<(), BeError> {
-        let guid = self.get_be_guid(target)?;
         self.connection.call_method(
             Some(SERVICE_NAME),
-            &be_object_path(guid),
-            Some(BOOT_ENV_INTERFACE),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
             "Destroy",
-            &(force_unmount, snapshots),
+            &(target, force_unmount, snapshots),
         )?;
         Ok(())
     }
@@ -115,27 +105,25 @@ impl Client for ClientProxy {
             MountMode::ReadOnly => true,
             MountMode::ReadWrite => false,
         };
-        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some(SERVICE_NAME),
-            &be_object_path(guid),
-            Some(BOOT_ENV_INTERFACE),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
             "Mount",
-            &(mountpoint, read_only),
+            &(be_name, mountpoint, read_only),
         )?;
         Ok(())
     }
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, BeError> {
-        let guid = self.get_be_guid(be_name)?;
         let result: String = self
             .connection
             .call_method(
                 Some(SERVICE_NAME),
-                &be_object_path(guid),
-                Some(BOOT_ENV_INTERFACE),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
                 "Unmount",
-                &(force,),
+                &(be_name, force),
             )?
             .body()
             .deserialize()?;
@@ -147,47 +135,29 @@ impl Client for ClientProxy {
         }
     }
 
-    fn hostid(&self, be_name: &str) -> Result<Option<u32>, BeError> {
-        let guid = self.get_be_guid(be_name)?;
-        let hostid: u32 = self
-            .connection
-            .call_method(
-                Some(SERVICE_NAME),
-                &be_object_path(guid),
-                Some(BOOT_ENV_INTERFACE),
-                "GetHostid",
-                &(),
-            )?
-            .body()
-            .deserialize()?;
-
-        if hostid == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(hostid))
-        }
+    fn hostid(&self, _be_name: &str) -> Result<Option<u32>, BeError> {
+        // TODO: Decide whether to implement this.
+        Ok(None)
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), BeError> {
-        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some(SERVICE_NAME),
-            &be_object_path(guid),
-            Some(BOOT_ENV_INTERFACE),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
             "Rename",
-            &(new_name,),
+            &(be_name, new_name),
         )?;
         Ok(())
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), BeError> {
-        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some(SERVICE_NAME),
-            &be_object_path(guid),
-            Some(BOOT_ENV_INTERFACE),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
             "Activate",
-            &(temporary,),
+            &(be_name, temporary),
         )?;
         Ok(())
     }
@@ -204,13 +174,12 @@ impl Client for ClientProxy {
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), BeError> {
-        let guid = self.get_be_guid(be_name)?;
         self.connection.call_method(
             Some(SERVICE_NAME),
-            &be_object_path(guid),
-            Some(BOOT_ENV_INTERFACE),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
             "Rollback",
-            &(snapshot,),
+            &(be_name, snapshot),
         )?;
         Ok(())
     }
@@ -240,15 +209,14 @@ impl Client for ClientProxy {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, BeError> {
-        let guid = self.get_be_guid(be_name)?;
         let snapshots_data: Vec<(String, String, String, u64, i64)> = self
             .connection
             .call_method(
                 Some(SERVICE_NAME),
-                &be_object_path(guid),
-                Some(BOOT_ENV_INTERFACE),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
                 "GetSnapshots",
-                &(),
+                &(be_name,),
             )?
             .body()
             .deserialize()?;
@@ -271,7 +239,11 @@ impl Client for ClientProxy {
         Ok(snapshots)
     }
 
-    fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, BeError> {
+    fn snapshot(
+        &self,
+        source: Option<&Label>,
+        description: Option<&str>,
+    ) -> Result<String, BeError> {
         let src = source.map(|label| label.to_string()).unwrap_or_default();
         let desc = description.unwrap_or("");
         let result: String = self
@@ -411,19 +383,19 @@ impl BootEnvironmentObject {
 
 #[interface(name = "ca.kamacite.BootEnvironment")]
 impl BootEnvironmentObject {
-    /// Boot environment name
+    /// The name of this boot environment.
     #[zbus(property)]
     fn name(&self) -> String {
         self.data.read().unwrap().name.clone()
     }
 
-    /// Boot environment dataset path
+    /// The ZFS dataset path (e.g., `zroot/ROOT/default`).
     #[zbus(property)]
     fn path(&self) -> String {
         self.data.read().unwrap().path.clone()
     }
 
-    /// Boot environment description
+    /// A description for this boot environment, if any.
     #[zbus(property)]
     fn description(&self) -> String {
         self.data
@@ -434,7 +406,7 @@ impl BootEnvironmentObject {
             .unwrap_or_default()
     }
 
-    /// Current mountpoint (empty if not mounted)
+    /// If the boot environment is currently mounted, this is its mountpoint.
     #[zbus(property)]
     fn mountpoint(&self) -> String {
         self.data
@@ -446,44 +418,51 @@ impl BootEnvironmentObject {
             .unwrap_or_default()
     }
 
-    /// Whether this is the currently active boot environment
+    /// Whether the system is currently booted into this boot environment.
     #[zbus(property(emits_changed_signal = "const"))]
     fn active(&self) -> bool {
         self.data.read().unwrap().active
     }
 
-    /// Whether this BE will be used for next boot
+    /// Whether the system will reboot into this environment.
     #[zbus(property)]
     fn next_boot(&self) -> bool {
         self.data.read().unwrap().next_boot
     }
 
-    /// Whether this BE is set for one-time boot
+    /// Whether the system will reboot into this environment temporarily.
     #[zbus(property)]
     fn boot_once(&self) -> bool {
         self.data.read().unwrap().boot_once
     }
 
-    /// Space used by this boot environment in bytes
+    /// Bytes on the filesystem associated with this boot environment.
     #[zbus(property)]
     fn space(&self) -> u64 {
         self.data.read().unwrap().space
     }
 
-    /// Creation timestamp (Unix time)
+    /// Unix timestamp for when this boot environment was created.
     #[zbus(property(emits_changed_signal = "const"))]
     fn created(&self) -> i64 {
         self.data.read().unwrap().created
     }
 
-    /// Destroy this boot environment
+    /// Mark this boot environment as the default root filesystem.
+    fn activate(&self, temporary: bool) -> zbus::fdo::Result<()> {
+        self.client
+            .activate(&self.data.read().unwrap().name, temporary)?;
+        Ok(())
+    }
+
+    /// Destroy this boot environment.
     fn destroy(&self, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
         self.client
             .destroy(&self.data.read().unwrap().name, force_unmount, snapshots)?;
         Ok(())
     }
 
-    /// Mount this boot environment
+    /// Mount this boot environment.
     fn mount(&self, mountpoint: &str, read_only: bool) -> zbus::fdo::Result<()> {
         let mode = if read_only {
             MountMode::ReadOnly
@@ -496,7 +475,8 @@ impl BootEnvironmentObject {
         Ok(())
     }
 
-    /// Unmount this boot environment
+    /// Unmount this boot environment.
+    #[zbus(out_args("mountpoint"))]
     fn unmount(&self, force: bool) -> zbus::fdo::Result<String> {
         let result = self
             .client
@@ -504,28 +484,22 @@ impl BootEnvironmentObject {
         Ok(result.map(|p| p.display().to_string()).unwrap_or_default())
     }
 
-    /// Rename this boot environment
+    /// Rename this boot environment.
     fn rename(&self, new_name: &str) -> zbus::fdo::Result<()> {
         self.client
             .rename(&self.data.read().unwrap().name, new_name)?;
         Ok(())
     }
 
-    /// Activate this boot environment
-    fn activate(&self, temporary: bool) -> zbus::fdo::Result<()> {
-        self.client
-            .activate(&self.data.read().unwrap().name, temporary)?;
-        Ok(())
-    }
-
-    /// Rollback to a snapshot
+    /// Roll this boot environment back to a snapshot.
     fn rollback(&self, snapshot: &str) -> zbus::fdo::Result<()> {
         self.client
             .rollback(&self.data.read().unwrap().name, snapshot)?;
         Ok(())
     }
 
-    /// Get snapshots for this boot environment
+    /// Get snapshots for this boot environment.
+    #[zbus(out_args("snapshots"))]
     fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, String, String, u64, i64)>> {
         let snapshots = self.client.get_snapshots(&self.data.read().unwrap().name)?;
         Ok(snapshots
@@ -550,7 +524,7 @@ impl BootEnvironmentObject {
     //     Ok(hostid.unwrap_or(0))
     // }
 
-    /// Create a snapshot of this boot environment
+    /// Create a snapshot of this boot environment.
     #[zbus(out_args("snapshot"))]
     fn snapshot(&self, snapshot_name: &str, description: &str) -> zbus::fdo::Result<String> {
         let be_name = &self.data.read().unwrap().name;
@@ -671,7 +645,20 @@ impl BootEnvironmentManager {
         Ok(())
     }
 
-    /// Create a new boot environment by cloning an existing one
+    /// Mark a boot environment as the default root filesystem.
+    fn activate(&self, be_name: &str, temporary: bool) -> zbus::fdo::Result<()> {
+        self.client.activate(be_name, temporary)?;
+        Ok(())
+    }
+
+    /// Clear any temporary boot environment activations.
+    fn clear_temporary_activations(&self) -> zbus::fdo::Result<()> {
+        self.client.clear_boot_once()?;
+        Ok(())
+    }
+
+    /// Create a boot environment from an existing boot environment or snapshot.
+    #[zbus(out_args("object_path"))]
     fn create(
         &self,
         name: &str,
@@ -703,7 +690,8 @@ impl BootEnvironmentManager {
         Ok(be_object_path(guid))
     }
 
-    /// Create a new empty boot environment
+    /// Create a new empty boot environment.
+    #[zbus(out_args("object_path"))]
     fn create_empty(
         &self,
         name: &str,
@@ -735,13 +723,8 @@ impl BootEnvironmentManager {
         Ok(be_object_path(guid))
     }
 
-    /// Clear temporary boot environment activation.
-    fn clear_boot_once(&self) -> zbus::fdo::Result<()> {
-        self.client.clear_boot_once()?;
-        Ok(())
-    }
-
-    /// Create a snapshot of a boot environment
+    /// Create a snapshot of a boot environment.
+    #[zbus(out_args("snapshot"))]
     fn snapshot(&self, target: &str, description: &str) -> zbus::fdo::Result<String> {
         let target_opt = if target.is_empty() {
             None
@@ -757,9 +740,33 @@ impl BootEnvironmentManager {
         Ok(result)
     }
 
-    /// Create the ZFS dataset layout for boot environments.
-    fn init(&self, pool: &str) -> zbus::fdo::Result<()> {
-        self.client.init(pool)?;
+    /// Destroy an existing boot environment or snapshot.
+    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
+        self.client.destroy(target, force_unmount, snapshots)?;
+        Ok(())
+    }
+
+    /// Mount a boot environment.
+    fn mount(&self, be_name: &str, mountpoint: &str, read_only: bool) -> zbus::fdo::Result<()> {
+        let mode = if read_only {
+            MountMode::ReadOnly
+        } else {
+            MountMode::ReadWrite
+        };
+        self.client.mount(be_name, mountpoint, mode)?;
+        Ok(())
+    }
+
+    /// Unmount an inactive boot environment.
+    #[zbus(out_args("mountpoint"))]
+    fn unmount(&self, be_name: &str, force: bool) -> zbus::fdo::Result<String> {
+        let result = self.client.unmount(be_name, force)?;
+        Ok(result.map(|p| p.display().to_string()).unwrap_or_default())
+    }
+
+    /// Rename a boot environment.
+    fn rename(&self, be_name: &str, new_name: &str) -> zbus::fdo::Result<()> {
+        self.client.rename(be_name, new_name)?;
         Ok(())
     }
 
@@ -767,6 +774,39 @@ impl BootEnvironmentManager {
     fn describe(&self, target: &str, description: &str) -> zbus::fdo::Result<()> {
         let label = target.parse::<Label>()?;
         self.client.describe(&label, description)?;
+        Ok(())
+    }
+
+    /// Roll back a boot environment to an earlier snapshot.
+    fn rollback(&self, be_name: &str, snapshot: &str) -> zbus::fdo::Result<()> {
+        self.client.rollback(be_name, snapshot)?;
+        Ok(())
+    }
+
+    /// Get snapshots for a boot environment.
+    #[zbus(out_args("snapshots"))]
+    fn get_snapshots(
+        &self,
+        be_name: &str,
+    ) -> zbus::fdo::Result<Vec<(String, String, String, u64, i64)>> {
+        let snapshots = self.client.get_snapshots(be_name)?;
+        Ok(snapshots
+            .into_iter()
+            .map(|snap| {
+                (
+                    snap.name,
+                    snap.path,
+                    snap.description.unwrap_or_default(),
+                    snap.space,
+                    snap.created,
+                )
+            })
+            .collect())
+    }
+
+    /// Create the ZFS dataset layout for boot environments.
+    fn init(&self, pool: &str) -> zbus::fdo::Result<()> {
+        self.client.init(pool)?;
         Ok(())
     }
 }
@@ -786,6 +826,7 @@ impl ObjectManager {
 #[interface(name = "org.freedesktop.DBus.ObjectManager")]
 impl ObjectManager {
     /// Get all managed objects and their interfaces
+    #[zbus(out_args("object_paths_interfaces_and_properties"))]
     fn get_managed_objects(
         &self,
     ) -> zbus::fdo::Result<BTreeMap<ObjectPath<'static>, BTreeMap<String, BootEnvironment>>> {
