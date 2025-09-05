@@ -157,13 +157,7 @@ impl Client for LibZfsClient {
         })
     }
 
-    fn destroy(
-        &self,
-        be_name: &str,
-        force_unmount: bool,
-        _force_no_verify: bool,
-        _snapshots: bool,
-    ) -> Result<(), Error> {
+    fn destroy(&self, be_name: &str, force_unmount: bool, _snapshots: bool) -> Result<(), Error> {
         let be_path = self.root.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;

@@ -98,20 +98,14 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn destroy(
-        &self,
-        target: &str,
-        force_unmount: bool,
-        force_no_verify: bool,
-        snapshots: bool,
-    ) -> Result<(), BeError> {
+    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> Result<(), BeError> {
         let guid = self.get_be_guid(target)?;
         self.connection.call_method(
             Some(SERVICE_NAME),
             &be_object_path(guid),
             Some(BOOT_ENV_INTERFACE),
             "Destroy",
-            &(force_unmount, force_no_verify, snapshots),
+            &(force_unmount, snapshots),
         )?;
         Ok(())
     }
@@ -498,18 +492,9 @@ impl BootEnvironmentObject {
     }
 
     /// Destroy this boot environment
-    fn destroy(
-        &self,
-        force_unmount: bool,
-        force_no_verify: bool,
-        snapshots: bool,
-    ) -> zbus::fdo::Result<()> {
-        self.client.destroy(
-            &self.data.read().unwrap().name,
-            force_unmount,
-            force_no_verify,
-            snapshots,
-        )?;
+    fn destroy(&self, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
+        self.client
+            .destroy(&self.data.read().unwrap().name, force_unmount, snapshots)?;
         Ok(())
     }
 

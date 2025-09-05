@@ -152,13 +152,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn destroy(
-        &self,
-        target: &str,
-        force_unmount: bool,
-        _force_no_verify: bool,
-        snapshots: bool,
-    ) -> Result<(), Error> {
+    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> Result<(), Error> {
         // First, check if the BE exists and validate constraints
         {
             let bes = self.bes.read().unwrap();
@@ -614,7 +608,7 @@ mod tests {
         assert_eq!(bes[0].name, "destroyable");
 
         // Destroy it
-        let result = client.destroy("destroyable", false, false, false);
+        let result = client.destroy("destroyable", false, false);
         assert!(result.is_ok());
 
         // Verify it's gone
@@ -625,7 +619,7 @@ mod tests {
     #[test]
     fn test_emulated_destroy_not_found() {
         let client = EmulatorClient::empty();
-        let result = client.destroy("nonexistent", false, false, false);
+        let result = client.destroy("nonexistent", false, false);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -648,7 +642,7 @@ mod tests {
         let client = EmulatorClient::new(vec![active_be]);
 
         // Try to destroy the active boot environment - should fail
-        let result = client.destroy("active-be", false, false, false);
+        let result = client.destroy("active-be", false, false);
         assert!(matches!(result, Err(Error::CannotDestroyActive { name }) if name == "active-be"));
 
         // Verify it still exists
@@ -676,7 +670,7 @@ mod tests {
         let client = EmulatorClient::new(vec![mounted_be]);
 
         // Try to destroy without force_unmount - should fail
-        let result = client.destroy("mounted-be", false, false, false);
+        let result = client.destroy("mounted-be", false, false);
         assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "mounted-be" && mountpoint == "/mnt/test"));
 
@@ -686,7 +680,7 @@ mod tests {
         assert_eq!(bes[0].name, "mounted-be");
 
         // Try to destroy with force_unmount - should succeed
-        let result = client.destroy("mounted-be", true, false, false);
+        let result = client.destroy("mounted-be", true, false);
         assert!(result.is_ok());
 
         // Verify it's gone
@@ -713,7 +707,7 @@ mod tests {
         assert_eq!(bes[0].description, Some("Temporary BE".to_string()));
 
         // Destroy it
-        let result = client.destroy("temp-be", false, false, false);
+        let result = client.destroy("temp-be", false, false);
         assert!(result.is_ok());
 
         // Verify it's gone
@@ -721,7 +715,7 @@ mod tests {
         assert_eq!(bes.len(), 0);
 
         // Try to destroy it again - should fail
-        let result = client.destroy("temp-be", false, false, false);
+        let result = client.destroy("temp-be", false, false);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "temp-be"));
     }
 
@@ -1231,7 +1225,7 @@ mod tests {
         assert!(bes[0].boot_once); // Should have boot_once for temporary activation
 
         // Destroy it (should work since it's not active)
-        let result = client.destroy("renamed-be", false, false, false);
+        let result = client.destroy("renamed-be", false, false);
         assert!(result.is_ok());
 
         // Verify it's gone

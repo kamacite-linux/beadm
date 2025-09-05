@@ -136,10 +136,6 @@ enum Commands {
         /// Destroy snapshots of the boot environment if needed.
         #[arg(short = 's')]
         destroy_snapshots: bool,
-
-        /// Skip interactive verification.
-        #[arg(short = 'F')]
-        no_verify: bool,
     },
     /// List boot environments.
     List {
@@ -577,10 +573,9 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             target,
             force_unmount,
             destroy_snapshots,
-            no_verify,
         } => {
             client
-                .destroy(target, *force_unmount, *no_verify, *destroy_snapshots)
+                .destroy(target, *force_unmount, *destroy_snapshots)
                 .context("Failed to destroy boot environment")?;
             println!("Destroyed '{}'.", target);
             Ok(())
