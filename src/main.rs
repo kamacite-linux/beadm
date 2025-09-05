@@ -96,7 +96,7 @@ enum Commands {
 
         /// Set the host ID for empty boot environments. Defaults to the value
         /// in /etc/hostid
-        #[arg(long)]
+        #[arg(long, hide = true)]
         host_id: Option<String>,
 
         /// Set a description for an empty boot environment using PRETTY_NAME
@@ -227,6 +227,7 @@ enum Commands {
         snapshot: String,
     },
     /// Get the host ID from a boot environment.
+    #[command(hide = true)]
     Hostid {
         /// The boot environment.
         be_name: String,
