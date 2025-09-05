@@ -696,7 +696,6 @@ impl BootEnvironmentManager {
         &self,
         name: &str,
         description: &str,
-        host_id: &str,
         properties: Vec<String>,
     ) -> zbus::fdo::Result<ObjectPath<'static>> {
         let desc = if description.is_empty() {
@@ -704,13 +703,7 @@ impl BootEnvironmentManager {
         } else {
             Some(description)
         };
-        let hid = if host_id.is_empty() {
-            None
-        } else {
-            Some(host_id)
-        };
-
-        self.client.create_empty(name, desc, hid, &properties)?;
+        self.client.create_empty(name, desc, None, &properties)?;
 
         // Get the newly created BE to find its GUID
         let bes = self.client.get_boot_environments()?;
