@@ -574,6 +574,9 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             force_unmount,
             destroy_snapshots,
         } => {
+            if *destroy_snapshots {
+                anyhow::bail!("Destroying snapshots (via -s) is not yet supported.");
+            }
             client
                 .destroy(target, *force_unmount, *destroy_snapshots)
                 .context("Failed to destroy boot environment")?;
