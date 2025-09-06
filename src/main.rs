@@ -1054,10 +1054,10 @@ alt      -       -           8K     2021-06-10 02:11  Testing
             String::from_utf8(output).unwrap(),
             r"NAME                      ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
 default                   NR      /           906M   2021-06-10 01:09  -
-default@2021-06-10-04:30  -       -           395K   2021-06-10 01:30  -
+default@2021-06-10-04:30  -       -           395K   2021-06-10 01:30  Automatic snapshot
 default@2021-06-10-05:10  -       -           395K   2021-06-10 02:10  -
 alt                       -       -           8K     2021-06-10 02:11  Testing
-alt@backup                -       -           1K     2021-06-10 02:20  -
+alt@backup                -       -           1K     2021-06-10 02:20  Manual backup
 "
         );
 
@@ -1081,13 +1081,13 @@ alt@backup                -       -           1K     2021-06-10 02:20  -
         assert_eq!(lines[0], "default\tNR\t/\t950000000\t1623301740\t");
         assert_eq!(
             lines[1],
-            "default@2021-06-10-04:30\t\t\t404000\t1623303000\t"
+            "default@2021-06-10-04:30\t\t\t404000\t1623303000\tAutomatic snapshot"
         );
         assert_eq!(
             lines[2],
             "default@2021-06-10-05:10\t\t\t404000\t1623305400\t"
         );
         assert_eq!(lines[3], "alt\t\t\t8192\t1623305460\tTesting");
-        assert_eq!(lines[4], "alt@backup\t\t\t1024\t1623306000\t");
+        assert_eq!(lines[4], "alt@backup\t\t\t1024\t1623306000\tManual backup");
     }
 }
