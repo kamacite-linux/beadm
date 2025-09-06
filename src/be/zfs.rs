@@ -157,46 +157,57 @@ impl Client for LibZfsClient {
         })
     }
 
-    fn destroy(&self, be_name: &str, force_unmount: bool, _snapshots: bool) -> Result<(), Error> {
-        let be_path = self.root.append(be_name)?;
+    fn destroy(&self, target: &Label, force_unmount: bool, _snapshots: bool) -> Result<(), Error> {
         let lzh = LibHandle::get();
-        let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
 
-        // Cannot destroy the active, next, or boot once boot environment.
-        if let Some(rootfs) = get_rootfs()? {
-            if be_path == rootfs {
-                return Err(Error::CannotDestroyActive {
-                    name: be_name.to_string(),
-                });
-            }
-        }
-        if let Some(bootfs) = self.get_next_boot(&lzh)? {
-            if be_path == bootfs {
-                return Err(Error::CannotDestroyActive {
-                    name: be_name.to_string(),
-                });
-            }
-        }
-        if let Some(bootfs) = self.get_previous_boot(&lzh)? {
-            if be_path == bootfs {
-                return Err(Error::CannotDestroyActive {
-                    name: be_name.to_string(),
-                });
-            }
-        }
+        let dataset = match target {
+            Label::Name(name) => {
+                let path = self.root.append(name)?;
+                let dataset = Dataset::boot_environment(&lzh, name, &path)?;
 
-        let mountpoint = dataset.get_mountpoint();
-        if mountpoint.is_some() {
-            if !force_unmount {
-                return Err(Error::Mounted {
-                    name: be_name.to_string(),
-                    mountpoint: mountpoint.unwrap().display().to_string(),
-                });
-            } else {
-                // Best-effort attempt to unmount the dataset.
-                _ = dataset.unmount(&lzh, true);
+                // Cannot destroy the active, next, or boot once boot environment.
+                if let Some(rootfs) = get_rootfs()? {
+                    if path == rootfs {
+                        return Err(Error::CannotDestroyActive {
+                            name: name.to_string(),
+                        });
+                    }
+                }
+                if let Some(bootfs) = self.get_next_boot(&lzh)? {
+                    if path == bootfs {
+                        return Err(Error::CannotDestroyActive {
+                            name: name.to_string(),
+                        });
+                    }
+                }
+                if let Some(bootfs) = self.get_previous_boot(&lzh)? {
+                    if path == bootfs {
+                        return Err(Error::CannotDestroyActive {
+                            name: name.to_string(),
+                        });
+                    }
+                }
+
+                let mountpoint = dataset.get_mountpoint();
+                if mountpoint.is_some() {
+                    if !force_unmount {
+                        return Err(Error::Mounted {
+                            name: name.to_string(),
+                            mountpoint: mountpoint.unwrap().display().to_string(),
+                        });
+                    } else {
+                        // Best-effort attempt to unmount the dataset.
+                        _ = dataset.unmount(&lzh, true);
+                    }
+                }
+
+                dataset
             }
-        }
+            Label::Snapshot(name, snapshot) => {
+                let path = self.root.append(name)?.snapshot(snapshot)?;
+                Dataset::snapshot(&lzh, &path)?
+            }
+        };
 
         dataset.destroy(&lzh)
     }

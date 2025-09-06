@@ -89,14 +89,23 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> Result<(), BeError> {
-        self.connection.call_method(
-            Some(SERVICE_NAME),
-            BOOT_ENV_PATH,
-            Some(MANAGER_INTERFACE),
-            "Destroy",
-            &(target, force_unmount, snapshots),
-        )?;
+    fn destroy(&self, target: &Label, force_unmount: bool, snapshots: bool) -> Result<(), BeError> {
+        match target {
+            Label::Name(name) => self.connection.call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
+                "Destroy",
+                &(name, force_unmount, snapshots),
+            ),
+            Label::Snapshot(name, snapshot) => self.connection.call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
+                "DestroySnapshot",
+                &(name, snapshot),
+            ),
+        }?;
         Ok(())
     }
 
@@ -457,8 +466,20 @@ impl BootEnvironmentObject {
 
     /// Destroy this boot environment.
     fn destroy(&self, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
+        let be_name = self.data.read().unwrap().name.clone();
         self.client
-            .destroy(&self.data.read().unwrap().name, force_unmount, snapshots)?;
+            .destroy(&Label::Name(be_name), force_unmount, snapshots)?;
+        Ok(())
+    }
+
+    /// Destroy a snapshot of this boot environment.
+    fn destroy_snapshot(&self, snapshot: &str) -> zbus::fdo::Result<()> {
+        let be_name = self.data.read().unwrap().name.clone();
+        self.client.destroy(
+            &Label::Snapshot(be_name, snapshot.to_string()),
+            false,
+            false,
+        )?;
         Ok(())
     }
 
@@ -734,8 +755,16 @@ impl BootEnvironmentManager {
     }
 
     /// Destroy an existing boot environment or snapshot.
-    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
-        self.client.destroy(target, force_unmount, snapshots)?;
+    fn destroy(&self, name: &str, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
+        let label = Label::Name(name.to_string());
+        self.client.destroy(&label, force_unmount, snapshots)?;
+        Ok(())
+    }
+
+    /// Destroy an existing boot environment snapshot.
+    fn destroy_snapshot(&self, name: &str, snapshot: &str) -> zbus::fdo::Result<()> {
+        let label = Label::Snapshot(name.to_string(), snapshot.to_string());
+        self.client.destroy(&label, false, false)?;
         Ok(())
     }
 

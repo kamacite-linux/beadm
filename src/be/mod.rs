@@ -251,7 +251,7 @@ pub trait Client: Send + Sync {
         properties: &[String],
     ) -> Result<(), Error>;
 
-    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> Result<(), Error>;
+    fn destroy(&self, target: &Label, force_unmount: bool, snapshots: bool) -> Result<(), Error>;
 
     fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), Error>;
 

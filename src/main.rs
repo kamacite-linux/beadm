@@ -127,7 +127,7 @@ enum Commands {
     Destroy {
         /// The boot environment or snapshot (in the form 'beName' or
         /// 'beName@snapshot').
-        target: String,
+        target: Label,
 
         /// Forcefully unmount the boot environment if needed.
         #[arg(short = 'f')]

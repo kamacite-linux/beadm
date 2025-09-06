@@ -152,41 +152,57 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn destroy(&self, target: &str, force_unmount: bool, snapshots: bool) -> Result<(), Error> {
-        // First, check if the BE exists and validate constraints
-        {
-            let bes = self.bes.read().unwrap();
-            let be = match bes.iter().find(|be| be.name == target) {
-                Some(be) => be,
-                None => {
-                    return Err(Error::NotFound {
-                        name: target.to_string(),
-                    });
+    fn destroy(&self, target: &Label, force_unmount: bool, snapshots: bool) -> Result<(), Error> {
+        match target {
+            Label::Name(be_name) => {
+                // Destroy a boot environment
+                // First, check if the BE exists and validate constraints
+                {
+                    let bes = self.bes.read().unwrap();
+                    let be = match bes.iter().find(|be| be.name == *be_name) {
+                        Some(be) => be,
+                        None => {
+                            return Err(Error::NotFound {
+                                name: be_name.to_string(),
+                            });
+                        }
+                    };
+
+                    if be.active {
+                        return Err(Error::CannotDestroyActive {
+                            name: be.name.to_string(),
+                        });
+                    }
+
+                    if !force_unmount && be.mountpoint.is_some() {
+                        return Err(Error::Mounted {
+                            name: be.name.to_string(),
+                            mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
+                        });
+                    }
+                } // Release the borrow here
+
+                if snapshots {
+                    unimplemented!("Mocking does not yet track snapshots");
                 }
-            };
 
-            if be.active {
-                return Err(Error::CannotDestroyActive {
-                    name: be.name.to_string(),
-                });
+                // Now we can safely borrow mutably to remove the BE
+                self.bes.write().unwrap().retain(|x| x.name != *be_name);
+
+                Ok(())
             }
+            Label::Snapshot(be_name, _snapshot_name) => {
+                // Destroy a snapshot - for mock implementation, we just validate the BE exists
+                let bes = self.bes.read().unwrap();
+                if !bes.iter().any(|be| be.name == *be_name) {
+                    return Err(Error::not_found(be_name));
+                }
 
-            if !force_unmount && be.mountpoint.is_some() {
-                return Err(Error::Mounted {
-                    name: be.name.to_string(),
-                    mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
-                });
+                // For mock implementation, snapshots are generated on-the-fly
+                // so we can't actually destroy them, but we can pretend to succeed
+                Ok(())
             }
-        } // Release the borrow here
-
-        if snapshots {
-            unimplemented!("Mocking does not yet track snapshots");
         }
-
-        // Now we can safely borrow mutably to remove the BE
-        self.bes.write().unwrap().retain(|x| x.name != target);
-
-        Ok(())
     }
 
     fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
@@ -608,7 +624,7 @@ mod tests {
         assert_eq!(bes[0].name, "destroyable");
 
         // Destroy it
-        let result = client.destroy("destroyable", false, false);
+        let result = client.destroy(&Label::Name("destroyable".to_string()), false, false);
         assert!(result.is_ok());
 
         // Verify it's gone
@@ -619,7 +635,7 @@ mod tests {
     #[test]
     fn test_emulated_destroy_not_found() {
         let client = EmulatorClient::empty();
-        let result = client.destroy("nonexistent", false, false);
+        let result = client.destroy(&Label::Name("nonexistent".to_string()), false, false);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -642,7 +658,7 @@ mod tests {
         let client = EmulatorClient::new(vec![active_be]);
 
         // Try to destroy the active boot environment - should fail
-        let result = client.destroy("active-be", false, false);
+        let result = client.destroy(&Label::Name("active-be".to_string()), false, false);
         assert!(matches!(result, Err(Error::CannotDestroyActive { name }) if name == "active-be"));
 
         // Verify it still exists
@@ -670,7 +686,7 @@ mod tests {
         let client = EmulatorClient::new(vec![mounted_be]);
 
         // Try to destroy without force_unmount - should fail
-        let result = client.destroy("mounted-be", false, false);
+        let result = client.destroy(&Label::Name("mounted-be".to_string()), false, false);
         assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "mounted-be" && mountpoint == "/mnt/test"));
 
@@ -680,7 +696,7 @@ mod tests {
         assert_eq!(bes[0].name, "mounted-be");
 
         // Try to destroy with force_unmount - should succeed
-        let result = client.destroy("mounted-be", true, false);
+        let result = client.destroy(&Label::Name("mounted-be".to_string()), true, false);
         assert!(result.is_ok());
 
         // Verify it's gone
@@ -707,7 +723,7 @@ mod tests {
         assert_eq!(bes[0].description, Some("Temporary BE".to_string()));
 
         // Destroy it
-        let result = client.destroy("temp-be", false, false);
+        let result = client.destroy(&Label::Name("temp-be".to_string()), false, false);
         assert!(result.is_ok());
 
         // Verify it's gone
@@ -715,7 +731,7 @@ mod tests {
         assert_eq!(bes.len(), 0);
 
         // Try to destroy it again - should fail
-        let result = client.destroy("temp-be", false, false);
+        let result = client.destroy(&Label::Name("temp-be".to_string()), false, false);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "temp-be"));
     }
 
@@ -1225,7 +1241,7 @@ mod tests {
         assert!(bes[0].boot_once); // Should have boot_once for temporary activation
 
         // Destroy it (should work since it's not active)
-        let result = client.destroy("renamed-be", false, false);
+        let result = client.destroy(&Label::Name("renamed-be".to_string()), false, false);
         assert!(result.is_ok());
 
         // Verify it's gone
