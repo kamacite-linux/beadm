@@ -76,5 +76,11 @@ if enable_apk_hook
                      install_mode : 'rwxr--r--')
 endif
 
-# install_data('ca.kamacite.BootEnvironments1.policy',
-#              install_dir : polkit_actions_dir)
+if get_option('dbus').allowed()
+        polkit_policy = configure_file(
+                configuration : conf,
+                input : 'beadm.policy.in',
+                output : bus_name + '.policy')
+
+        install_data(polkit_policy, install_dir : polkit_actions_dir)
+endif

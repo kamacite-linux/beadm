@@ -458,7 +458,13 @@ impl BootEnvironmentObject {
     }
 
     /// Mark this boot environment as the default root filesystem.
-    fn activate(&self, temporary: bool) -> zbus::fdo::Result<()> {
+    async fn activate(
+        &self,
+        temporary: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         self.client.activate(name, temporary)?;
         tracing::info!(name, temporary, "Activated boot environment");
@@ -466,7 +472,14 @@ impl BootEnvironmentObject {
     }
 
     /// Destroy this boot environment.
-    fn destroy(&self, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
+    async fn destroy(
+        &self,
+        force_unmount: bool,
+        snapshots: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         self.client
             .destroy(&Label::Name(name.clone()), force_unmount, snapshots)?;
@@ -475,7 +488,13 @@ impl BootEnvironmentObject {
     }
 
     /// Destroy a snapshot of this boot environment.
-    fn destroy_snapshot(&self, snapshot: &str) -> zbus::fdo::Result<()> {
+    async fn destroy_snapshot(
+        &self,
+        snapshot: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         let label = Label::Snapshot(name.clone(), snapshot.to_string());
         self.client.destroy(&label, false, false)?;
@@ -509,7 +528,13 @@ impl BootEnvironmentObject {
     }
 
     /// Rename this boot environment.
-    fn rename(&self, new_name: &str) -> zbus::fdo::Result<()> {
+    async fn rename(
+        &self,
+        new_name: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         self.client.rename(name, new_name)?;
         tracing::info!(name, new_name, "Renamed boot environment");
@@ -517,7 +542,13 @@ impl BootEnvironmentObject {
     }
 
     /// Roll this boot environment back to a snapshot.
-    fn rollback(&self, snapshot: &str) -> zbus::fdo::Result<()> {
+    async fn rollback(
+        &self,
+        snapshot: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         self.client.rollback(name, snapshot)?;
         tracing::info!(name, snapshot, "Rolled boot environment back to snapshot");
@@ -552,7 +583,14 @@ impl BootEnvironmentObject {
 
     /// Create a snapshot of this boot environment.
     #[zbus(out_args("snapshot"))]
-    fn snapshot(&self, snapshot_name: &str, description: &str) -> zbus::fdo::Result<String> {
+    async fn snapshot(
+        &self,
+        snapshot_name: &str,
+        description: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<String> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         let label = if snapshot_name.is_empty() {
             Label::Name(name.clone())
@@ -570,7 +608,13 @@ impl BootEnvironmentObject {
     }
 
     /// Set a description for this boot environment.
-    fn describe(&self, description: &str) -> zbus::fdo::Result<()> {
+    async fn describe(
+        &self,
+        description: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let name = &self.data.read().unwrap().name;
         self.client
             .describe(&Label::Name(name.clone()), description)?;
@@ -674,14 +718,26 @@ impl BootEnvironmentManager {
     }
 
     /// Mark a boot environment as the default root filesystem.
-    fn activate(&self, name: &str, temporary: bool) -> zbus::fdo::Result<()> {
+    async fn activate(
+        &self,
+        name: &str,
+        temporary: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.activate(name, temporary)?;
         tracing::info!(name, temporary, "Activated boot environment");
         Ok(())
     }
 
     /// Clear any temporary boot environment activations.
-    fn clear_temporary_activations(&self) -> zbus::fdo::Result<()> {
+    async fn clear_temporary_activations(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.clear_boot_once()?;
         tracing::info!("Removed temporary boot environment activations");
         Ok(())
@@ -689,13 +745,16 @@ impl BootEnvironmentManager {
 
     /// Create a boot environment from an existing boot environment or snapshot.
     #[zbus(out_args("object_path"))]
-    fn create(
+    async fn create(
         &self,
         name: &str,
         description: &str,
         source: &str,
         properties: Vec<String>,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<ObjectPath<'static>> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let desc = if description.is_empty() {
             None
         } else {
@@ -728,12 +787,15 @@ impl BootEnvironmentManager {
 
     /// Create a new empty boot environment.
     #[zbus(out_args("object_path"))]
-    fn create_empty(
+    async fn create_empty(
         &self,
         name: &str,
         description: &str,
         properties: Vec<String>,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<ObjectPath<'static>> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let desc = if description.is_empty() {
             None
         } else {
@@ -755,7 +817,14 @@ impl BootEnvironmentManager {
 
     /// Create a snapshot of a boot environment.
     #[zbus(out_args("snapshot"))]
-    fn snapshot(&self, target: &str, description: &str) -> zbus::fdo::Result<String> {
+    async fn snapshot(
+        &self,
+        target: &str,
+        description: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<String> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let target_opt = if target.is_empty() {
             None
         } else {
@@ -772,7 +841,15 @@ impl BootEnvironmentManager {
     }
 
     /// Destroy an existing boot environment or snapshot.
-    fn destroy(&self, name: &str, force_unmount: bool, snapshots: bool) -> zbus::fdo::Result<()> {
+    async fn destroy(
+        &self,
+        name: &str,
+        force_unmount: bool,
+        snapshots: bool,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let label = Label::Name(name.to_string());
         self.client.destroy(&label, force_unmount, snapshots)?;
         tracing::info!(name, force_unmount, snapshots, "Destroyed boot environment");
@@ -780,7 +857,14 @@ impl BootEnvironmentManager {
     }
 
     /// Destroy an existing boot environment snapshot.
-    fn destroy_snapshot(&self, name: &str, snapshot: &str) -> zbus::fdo::Result<()> {
+    async fn destroy_snapshot(
+        &self,
+        name: &str,
+        snapshot: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let label = Label::Snapshot(name.to_string(), snapshot.to_string());
         self.client.destroy(&label, false, false)?;
         tracing::info!(snapshot = label.to_string(), "Destroyed snapshot");
@@ -789,6 +873,9 @@ impl BootEnvironmentManager {
 
     /// Mount a boot environment.
     fn mount(&self, name: &str, mountpoint: &str, read_only: bool) -> zbus::fdo::Result<()> {
+        // Note: this is not a privileged operation (yet), because mounting a
+        // boot environment doesn't give you any more permissions to modify it
+        // than you already have.
         let mode = if read_only {
             MountMode::ReadOnly
         } else {
@@ -811,14 +898,28 @@ impl BootEnvironmentManager {
     }
 
     /// Rename a boot environment.
-    fn rename(&self, name: &str, new_name: &str) -> zbus::fdo::Result<()> {
+    async fn rename(
+        &self,
+        name: &str,
+        new_name: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.rename(name, new_name)?;
         tracing::info!(name, new_name, "Renamed boot environment");
         Ok(())
     }
 
     /// Set a description for an existing boot environment or snapshot.
-    fn describe(&self, target: &str, description: &str) -> zbus::fdo::Result<()> {
+    async fn describe(
+        &self,
+        target: &str,
+        description: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         let label = target.parse::<Label>()?;
         self.client.describe(&label, description)?;
         tracing::info!(target, description, "Set description");
@@ -826,7 +927,14 @@ impl BootEnvironmentManager {
     }
 
     /// Roll back a boot environment to an earlier snapshot.
-    fn rollback(&self, name: &str, snapshot: &str) -> zbus::fdo::Result<()> {
+    async fn rollback(
+        &self,
+        name: &str,
+        snapshot: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.rollback(name, snapshot)?;
         tracing::info!(name, snapshot, "Rolled boot environment back to snapshot");
         Ok(())
@@ -854,7 +962,13 @@ impl BootEnvironmentManager {
     }
 
     /// Create the ZFS dataset layout for boot environments.
-    fn init(&self, pool: &str) -> zbus::fdo::Result<()> {
+    async fn init(
+        &self,
+        pool: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.init(pool)?;
         tracing::info!(pool, "Initialized boot environment dataset layout");
         Ok(())
@@ -906,6 +1020,75 @@ impl ObjectManager {
         object_path: &ObjectPath<'_>,
         interfaces: Vec<String>,
     ) -> zbus::Result<()>;
+}
+
+async fn check_authorization(
+    conn: &zbus::Connection,
+    header: &zbus::message::Header<'_>,
+    action_id: &str,
+) -> Result<(), zbus::Error> {
+    // Check if the sender is privileged (i.e. root, currently).
+    let sender_name = match header.sender() {
+        Some(name) => zbus::names::BusName::Unique(name.clone()),
+        None => {
+            tracing::error!(action_id, "Denying authorization due to missing sender");
+            return Err(zbus::fdo::Error::AccessDenied("Access denied".to_string()).into());
+        }
+    };
+    let dbus_proxy = zbus::fdo::DBusProxy::new(conn).await?;
+    let uid = dbus_proxy.get_connection_unix_user(sender_name).await?;
+    if uid == 0 {
+        tracing::debug!(action_id, uid, "Authorization granted for privileged user");
+        return Ok(());
+    }
+
+    // Otherwise check authorization via polkit.
+    //
+    // Note: This won't work if beadm is running on the user bus, because Polkit
+    // isn't available. You'll get an org.freedesktop.DBus.Error.ServiceUnknown.
+    let proxy = zbus_polkit::policykit1::AuthorityProxy::new(conn).await?;
+    tracing::debug!(action_id, uid, "Checking authorization via polkit");
+    let subject = match zbus_polkit::policykit1::Subject::new_for_message_header(header) {
+        Ok(subject) => subject,
+        Err(e) => {
+            tracing::error!(
+                action_id,
+                error = e.to_string(),
+                "Denying authorization due to invalid subject"
+            );
+            return Err(zbus::fdo::Error::AccessDenied("Access denied".to_string()).into());
+        }
+    };
+    let result = proxy
+        .check_authorization(
+            &subject,
+            action_id,
+            &std::collections::HashMap::new(),
+            zbus_polkit::policykit1::CheckAuthorizationFlags::AllowUserInteraction.into(),
+            "", // No cancellation support.
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                action_id,
+                error = e.to_string(),
+                "Polkit authorization check failed"
+            );
+            zbus::fdo::Error::AccessDenied("Access denied".to_string())
+        })?;
+    if result.is_authorized {
+        tracing::debug!(action_id, "Authorization granted");
+        Ok(())
+    } else if result.is_challenge {
+        tracing::debug!(action_id, "Authorization requires user interaction");
+        Err(zbus::fdo::Error::InteractiveAuthorizationRequired(
+            "Interactive authorization required".to_string(),
+        )
+        .into())
+    } else {
+        tracing::debug!(action_id, "Authorization failed");
+        Err(zbus::fdo::Error::AccessDenied("Access denied".to_string()).into())
+    }
 }
 
 /// Start a D-Bus service for boot environment administration.

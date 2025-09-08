@@ -44,7 +44,7 @@ endif
 
 if get_option('dbus').allowed()
         dbus_service_dir = datadir / 'dbus-1' / 'system-services'
-        # polkit_actions_dir = datadir / 'polkit-1' / 'actions'
+        polkit_actions_dir = datadir / 'polkit-1' / 'actions'
 
         # The dbus-daemon doesn't seem to be configured to look for policies in
         # /usr/local/share/dbus-1/system.d in distros I've tested, so only use
@@ -59,7 +59,7 @@ if get_option('dbus').allowed()
         summary({
                 'dbus' : dbus_service_dir,
                 'dbus policy' : dbus_policy_dir,
-                # 'polkit': polkit_actions_dir,
+                'polkit actions': polkit_actions_dir,
         })
 endif
 
