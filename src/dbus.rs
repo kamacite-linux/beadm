@@ -708,6 +708,7 @@ impl BootEnvironmentManager {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.activate(name, temporary)?;
         tracing::info!(name, temporary, "Activated boot environment");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
@@ -720,6 +721,7 @@ impl BootEnvironmentManager {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.clear_boot_once()?;
         tracing::info!("Removed temporary boot environment activations");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
@@ -762,6 +764,7 @@ impl BootEnvironmentManager {
             description = desc,
             "Created boot environment"
         );
+        self.refresh(conn.object_server()).await?;
         Ok(be_object_path(guid))
     }
 
@@ -792,6 +795,7 @@ impl BootEnvironmentManager {
             .ok_or_else(|| BeError::not_found(name))?;
 
         tracing::info!(name, description = desc, "Created empty boot environment");
+        self.refresh(conn.object_server()).await?;
         Ok(be_object_path(guid))
     }
 
@@ -817,6 +821,7 @@ impl BootEnvironmentManager {
         };
         let snapshot = self.client.snapshot(target_opt.as_ref(), desc_opt)?;
         tracing::info!(snapshot, "Created snapshot");
+        self.refresh(conn.object_server()).await?;
         Ok(snapshot)
     }
 
@@ -833,6 +838,7 @@ impl BootEnvironmentManager {
         let label = Label::Name(name.to_string());
         self.client.destroy(&label, force_unmount, snapshots)?;
         tracing::info!(name, force_unmount, snapshots, "Destroyed boot environment");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
@@ -848,11 +854,18 @@ impl BootEnvironmentManager {
         let label = Label::Snapshot(name.to_string(), snapshot.to_string());
         self.client.destroy(&label, false, false)?;
         tracing::info!(snapshot = label.to_string(), "Destroyed snapshot");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
     /// Mount a boot environment.
-    fn mount(&self, name: &str, mountpoint: &str, read_only: bool) -> zbus::fdo::Result<()> {
+    async fn mount(
+        &self,
+        name: &str,
+        mountpoint: &str,
+        read_only: bool,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
         // Note: this is not a privileged operation (yet), because mounting a
         // boot environment doesn't give you any more permissions to modify it
         // than you already have.
@@ -863,17 +876,24 @@ impl BootEnvironmentManager {
         };
         self.client.mount(name, mountpoint, mode)?;
         tracing::info!(name, mountpoint, read_only, "Mounted boot environment");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
     /// Unmount an inactive boot environment.
     #[zbus(out_args("mountpoint"))]
-    fn unmount(&self, name: &str, force: bool) -> zbus::fdo::Result<String> {
+    async fn unmount(
+        &self,
+        name: &str,
+        force: bool,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<String> {
         let mountpoint = self
             .client
             .unmount(name, force)?
             .map(|p| p.display().to_string());
         tracing::info!(name, mountpoint, "Unmounted boot environment");
+        self.refresh(conn.object_server()).await?;
         Ok(mountpoint.unwrap_or_default())
     }
 
@@ -888,6 +908,7 @@ impl BootEnvironmentManager {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.rename(name, new_name)?;
         tracing::info!(name, new_name, "Renamed boot environment");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
@@ -903,6 +924,7 @@ impl BootEnvironmentManager {
         let label = target.parse::<Label>()?;
         self.client.describe(&label, description)?;
         tracing::info!(target, description, "Set description");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
@@ -917,6 +939,7 @@ impl BootEnvironmentManager {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.rollback(name, snapshot)?;
         tracing::info!(name, snapshot, "Rolled boot environment back to snapshot");
+        self.refresh(conn.object_server()).await?;
         Ok(())
     }
 
@@ -1058,9 +1081,10 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
     let manager = iface_ref.get().await;
     manager.refresh(&connection.object_server()).await?;
 
-    // Keep the connection alive and periodically refresh objects
+    // Keep the connection alive and periodically refresh objects in case they
+    // are changed out from under us (by e.g. a direct zfs CLI call).
     loop {
-        async_io::Timer::after(std::time::Duration::from_secs(5)).await;
+        async_io::Timer::after(std::time::Duration::from_secs(60)).await;
         if let Err(e) = manager.refresh(&connection.object_server()).await {
             tracing::error!("Error refreshing objects: {}", e);
         }
