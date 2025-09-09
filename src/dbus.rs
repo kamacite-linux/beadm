@@ -652,9 +652,6 @@ impl BootEnvironmentManager {
             .into_iter()
             .map(|env| (env.guid, env))
             .collect();
-        let object_manager = object_server
-            .interface::<_, ObjectManager>(BOOT_ENV_PATH)
-            .await?;
         let mut guids = self.guids.lock().unwrap().clone(); // Clone to get Send.
 
         // Sync current boot environments to the objects we already have.
@@ -681,17 +678,8 @@ impl BootEnvironmentManager {
             object_server
                 .remove::<BootEnvironmentObject, _>(&path)
                 .await?;
-
-            // Emit an InterfacesRemoved signal, even if the object was not
-            // destroyed by remove().
-            ObjectManager::interfaces_removed(
-                object_manager.signal_emitter(),
-                &path,
-                vec![BOOT_ENV_INTERFACE.to_string()],
-            )
-            .await?;
-
             guids.remove(&guid);
+            tracing::debug!(path = path.to_string(), "Removed boot environment object");
         }
 
         // Add objects for new boot environments.
@@ -700,15 +688,7 @@ impl BootEnvironmentManager {
                 let obj = BootEnvironmentObject::new(env.clone(), self.client.clone());
                 let path = be_object_path(guid);
                 if object_server.at(&path, obj).await? {
-                    // Emit an InterfacesAdded signal after successful at().
-                    let mut interfaces = BTreeMap::new();
-                    interfaces.insert(BOOT_ENV_INTERFACE.to_string(), &env);
-                    ObjectManager::interfaces_added(
-                        object_manager.signal_emitter(),
-                        &path,
-                        interfaces,
-                    )
-                    .await?;
+                    tracing::debug!(path = path.to_string(), "Added boot environment object");
                 }
             }
         }
@@ -975,53 +955,6 @@ impl BootEnvironmentManager {
     }
 }
 
-/// ObjectManager interface implementation
-#[derive(Clone)]
-pub struct ObjectManager {
-    client: Arc<dyn Client>,
-}
-
-impl ObjectManager {
-    pub fn new(client: Arc<dyn Client>) -> Self {
-        Self { client }
-    }
-}
-
-#[interface(name = "org.freedesktop.DBus.ObjectManager")]
-impl ObjectManager {
-    /// Get all managed objects and their interfaces
-    #[zbus(out_args("object_paths_interfaces_and_properties"))]
-    fn get_managed_objects(
-        &self,
-    ) -> zbus::fdo::Result<BTreeMap<ObjectPath<'static>, BTreeMap<String, BootEnvironment>>> {
-        let mut objects = BTreeMap::new();
-        for env in self.client.get_boot_environments()? {
-            // We only manage objects with one interface.
-            let path = be_object_path(env.guid);
-            let mut interfaces = BTreeMap::new();
-            interfaces.insert(BOOT_ENV_INTERFACE.to_string(), env);
-            objects.insert(path, interfaces);
-        }
-        Ok(objects)
-    }
-
-    /// Signal emitted when new interfaces are added to an object
-    #[zbus(signal)]
-    async fn interfaces_added(
-        emitter: &SignalEmitter<'_>,
-        object_path: &ObjectPath<'_>,
-        interfaces_and_properties: BTreeMap<String, &BootEnvironment>,
-    ) -> zbus::Result<()>;
-
-    /// Signal emitted when interfaces are removed from an object
-    #[zbus(signal)]
-    async fn interfaces_removed(
-        emitter: &SignalEmitter<'_>,
-        object_path: &ObjectPath<'_>,
-        interfaces: Vec<String>,
-    ) -> zbus::Result<()>;
-}
-
 async fn check_authorization(
     conn: &zbus::Connection,
     header: &zbus::message::Header<'_>,
@@ -1109,7 +1042,7 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
     let connection = builder
         .name(SERVICE_NAME)?
         .serve_at(BOOT_ENV_PATH, BootEnvironmentManager::new(client.clone()))?
-        .serve_at(BOOT_ENV_PATH, ObjectManager::new(client))?
+        .serve_at(BOOT_ENV_PATH, zbus::fdo::ObjectManager)?
         .build()
         .await?;
 
