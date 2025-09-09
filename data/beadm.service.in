@@ -6,3 +6,4 @@ ConditionPathExists=/dev/zfs
 BusName=@bus_name@
 ExecStart=@bindir@/beadm daemon
 Restart=on-failure
+Environment=RUST_LOG=info

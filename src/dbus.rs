@@ -1028,6 +1028,7 @@ async fn check_authorization(
 pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbus::Result<()> {
     // Logs in journald don't need colours.
     tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .event_format(tracing_subscriber::fmt::format().with_ansi(false).compact())
         .init();
 
