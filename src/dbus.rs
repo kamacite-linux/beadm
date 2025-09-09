@@ -1059,7 +1059,7 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
 
     // Keep the connection alive and periodically refresh objects
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        async_io::Timer::after(std::time::Duration::from_secs(5)).await;
         if let Err(e) = manager.refresh(&connection.object_server()).await {
             tracing::error!("Error refreshing objects: {}", e);
         }
