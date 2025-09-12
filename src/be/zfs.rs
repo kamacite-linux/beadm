@@ -288,21 +288,23 @@ impl Client for LibZfsClient {
         Dataset::boot_environment(&lzh, be_name, &dataset)?; // Check existence.
         let zpool = Zpool::open(&lzh, &self.root.pool())?;
 
-        if temporary {
-            // For temporary activation, (1) copy the current `bootfs` into the
-            // `previous-bootfs` property; and then (2) write the new `bootfs`
-            // value.
+        if !temporary {
+            // Unset any temporary activations *before* setting the new `bootfs`
+            // value. That way we don't end up in an inconsistent state if
+            // either operation fails.
+            zpool.clear_previous_bootfs(&lzh)?;
+        } else if zpool.get_previous_bootfs().is_none() {
+            // For temporary activation, copy the current `bootfs` into the
+            // `previous-bootfs` property before write the new `bootfs` value,
+            // but *only* if there isn't a value already.
             let current_bootfs = zpool
                 .get_bootfs()
                 // TODO: We could potentially have a more useful error here.
                 .ok_or_else(|| Error::NoActiveBootEnvironment)?;
             zpool.set_previous_bootfs(&lzh, &current_bootfs)?;
-            zpool.set_bootfs(&lzh, &dataset)
-        } else {
-            zpool.set_bootfs(&lzh, &dataset)?;
-            // Ensure we unset any temporary activations, too.
-            zpool.clear_previous_bootfs(&lzh)
         }
+
+        zpool.set_bootfs(&lzh, &dataset)
     }
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error> {
