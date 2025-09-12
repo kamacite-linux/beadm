@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: MPL-2.0
+
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use std::ffi::{CStr, CString, OsStr, c_char, c_int, c_void};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
