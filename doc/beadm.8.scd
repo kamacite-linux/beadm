@@ -227,8 +227,8 @@ columns:
 *ACTIVE*
 	One or more flags for the activation status of the boot environment:
 
-	- _R_: Active now (i.e. it is the current filesystem for _/_).
-	- _N_: Active on reboot.
+	- _N_: Active "now" (i.e. it is the current filesystem for _/_).
+	- _R_: Active on "reboot".
 	- _T_: Active on reboot temporarily.
 
 *MOUNTPOINT*

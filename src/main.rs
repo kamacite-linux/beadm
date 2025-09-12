@@ -335,10 +335,10 @@ fn format_active_flags(be: &BootEnvironment) -> Option<String> {
         return None;
     }
     let mut flags = String::new();
-    if be.next_boot {
+    if be.active {
         flags.push('N');
     }
-    if be.active {
+    if be.next_boot {
         flags.push('R');
     }
     if be.boot_once {
