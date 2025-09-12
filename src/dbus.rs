@@ -404,6 +404,12 @@ impl BootEnvironmentObject {
         self.data.read().unwrap().path.clone()
     }
 
+    /// The ZFS dataset GUID.
+    #[zbus(property(emits_changed_signal = "const"))]
+    fn guid(&self) -> u64 {
+        self.data.read().unwrap().guid
+    }
+
     /// A description for this boot environment, if any.
     #[zbus(property)]
     fn description(&self) -> String {
