@@ -211,7 +211,30 @@ impl Client for LibZfsClient {
             }
             Label::Snapshot(name, snapshot) => {
                 let path = self.root.append(name)?.snapshot(snapshot)?;
-                Dataset::snapshot(&lzh, &path)?
+                let dataset = Dataset::snapshot(&lzh, &path)?;
+
+                // If this snapshot is the basis for any clones, we need to
+                // promote one of them first, ideally the oldest one.
+                let mut oldest_clone: Option<DatasetName> = None;
+                let mut oldest_time: i64 = i64::MAX;
+                dataset.iter_clones(&lzh, false, |clone| {
+                    // TODO: Do we need to verify the origin property matches
+                    // here?
+                    if let Some(name) = clone.get_name() {
+                        let creation_time = clone.get_creation_time();
+                        if creation_time < oldest_time {
+                            oldest_time = creation_time;
+                            oldest_clone = Some(name);
+                        }
+                    }
+                    Ok(())
+                })?;
+                if let Some(name) = oldest_clone {
+                    let target = Dataset::filesystem(&lzh, &name)?;
+                    target.promote(&lzh)?;
+                }
+
+                dataset
             }
         };
 
@@ -710,6 +733,15 @@ impl Dataset {
     /// Rollback this dataset to the specified snapshot.
     pub fn rollback_to(&self, lzh: &LibHandle, snapshot: &Dataset) -> Result<(), Error> {
         let result = unsafe { ffi::zfs_rollback(self.handle, snapshot.handle, 0) };
+        if result != 0 {
+            return Err(lzh.libzfs_error().into());
+        }
+        Ok(())
+    }
+
+    /// Promote this clone to be independent of its origin snapshot.
+    pub fn promote(&self, lzh: &LibHandle) -> Result<(), Error> {
+        let result = unsafe { ffi::zfs_promote(self.handle) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -1736,6 +1768,9 @@ mod ffi {
 
         // Rollback operation
         pub fn zfs_rollback(zhp: *mut ZfsHandle, snap: *mut ZfsHandle, force: c_int) -> c_int;
+
+        // Promote operation
+        pub fn zfs_promote(zhp: *mut ZfsHandle) -> c_int;
 
         // Iterator functions
         pub fn zfs_iter_children(
