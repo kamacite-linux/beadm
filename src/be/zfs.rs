@@ -721,53 +721,24 @@ impl Dataset {
     where
         F: FnMut(&Dataset) -> Result<(), Error>,
     {
-        // Helper struct to pass both callback and error state to the FFI callback
-        struct IterData<F> {
-            callback: F,
-            error: Option<Error>,
-        }
-
-        let mut iter_data = IterData {
-            callback,
-            error: None,
-        };
-        let data_ptr = &mut iter_data as *mut IterData<F>;
-
-        extern "C" fn snapshot_callback<F>(
-            zhp: *mut ffi::ZfsHandle,
-            data: *mut std::os::raw::c_void,
-        ) -> std::os::raw::c_int
-        where
-            F: FnMut(&Dataset) -> Result<(), Error>,
-        {
-            let iter_data = unsafe { &mut *(data as *mut IterData<F>) };
-            let dataset = Dataset::borrowed(zhp);
-
-            match (iter_data.callback)(&dataset) {
-                Ok(()) => 0, // Continue iteration
-                Err(e) => {
-                    iter_data.error = Some(e);
-                    1 // Stop iteration
-                }
-            }
-        }
-
+        let mut data = IterData::from(callback);
         let result = unsafe {
             ffi::zfs_iter_snapshots(
                 self.handle,
                 0, // simple = false for recursive iteration
-                snapshot_callback::<F>,
-                data_ptr as *mut std::os::raw::c_void,
+                iter_callback::<F>,
+                data.as_mut_ptr(),
                 0,        // min_txg = 0 (no minimum)
                 u64::MAX, // max_txg = max (no maximum)
             )
         };
 
-        // Check if the callback set an error
-        if let Some(error) = iter_data.error {
+        // Check if the callback set an error.
+        if let Some(error) = data.error {
             return Err(error);
         }
 
+        // Check for iteration failures.
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -780,50 +751,49 @@ impl Dataset {
     where
         F: FnMut(&Dataset) -> Result<(), Error>,
     {
-        // Helper struct to pass both callback and error state to the FFI callback
-        struct IterData<F> {
-            callback: F,
-            error: Option<Error>,
-        }
+        let mut data = IterData::from(callback);
+        let result =
+            unsafe { ffi::zfs_iter_children(self.handle, iter_callback::<F>, data.as_mut_ptr()) };
 
-        let mut iter_data = IterData {
-            callback,
-            error: None,
-        };
-        let data_ptr = &mut iter_data as *mut IterData<F>;
-
-        extern "C" fn children_callback<F>(
-            zhp: *mut ffi::ZfsHandle,
-            data: *mut std::os::raw::c_void,
-        ) -> std::os::raw::c_int
-        where
-            F: FnMut(&Dataset) -> Result<(), Error>,
-        {
-            let iter_data = unsafe { &mut *(data as *mut IterData<F>) };
-            let dataset = Dataset::borrowed(zhp);
-
-            match (iter_data.callback)(&dataset) {
-                Ok(()) => 0, // Continue iteration
-                Err(e) => {
-                    iter_data.error = Some(e);
-                    1 // Stop iteration
-                }
-            }
-        }
-
-        let result = unsafe {
-            ffi::zfs_iter_children(
-                self.handle,
-                children_callback::<F>,
-                data_ptr as *mut std::os::raw::c_void,
-            )
-        };
-
-        // Check if the callback set an error
-        if let Some(error) = iter_data.error {
+        // Check if the callback set an error.
+        if let Some(error) = data.error {
             return Err(error);
         }
 
+        // Check for iteration failures.
+        if result != 0 {
+            return Err(lzh.libzfs_error().into());
+        }
+
+        Ok(())
+    }
+
+    /// Iterate over the clones of this dataset.
+    pub fn iter_clones<F>(
+        &self,
+        lzh: &LibHandle,
+        allow_recursion: bool,
+        callback: F,
+    ) -> Result<(), Error>
+    where
+        F: FnMut(&Dataset) -> Result<(), Error>,
+    {
+        let mut data = IterData::from(callback);
+        let result = unsafe {
+            ffi::zfs_iter_dependents(
+                self.handle,
+                if allow_recursion { 1 } else { 0 },
+                iter_callback::<F>,
+                data.as_mut_ptr(),
+            )
+        };
+
+        // Check if the callback set an error.
+        if let Some(error) = data.error {
+            return Err(error);
+        }
+
+        // Check for iteration failures.
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -980,6 +950,51 @@ impl Drop for Dataset {
         }
         unsafe {
             ffi::zfs_close(self.handle);
+        }
+    }
+}
+
+/// Helper struct to pass both a closure and error state to libzfs iterator
+/// callbacks.
+struct IterData<F> {
+    callback: F,
+    error: Option<Error>,
+}
+
+impl<F> IterData<F>
+where
+    F: FnMut(&Dataset) -> Result<(), Error>,
+{
+    pub fn from(callback: F) -> Self {
+        IterData {
+            callback,
+            error: None,
+        }
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut c_void {
+        self as *mut IterData<F> as *mut c_void
+    }
+}
+
+/// C-style callback that can be passed to libzfs iterator functions.
+///
+/// SAFETY: This function assumes that the data is valid IterData.
+extern "C" fn iter_callback<F>(
+    zhp: *mut ffi::ZfsHandle,
+    data: *mut std::os::raw::c_void,
+) -> std::os::raw::c_int
+where
+    F: FnMut(&Dataset) -> Result<(), Error>,
+{
+    let iter_data = unsafe { &mut *(data as *mut IterData<F>) };
+    let dataset = Dataset::borrowed(zhp);
+
+    match (iter_data.callback)(&dataset) {
+        Ok(()) => 0, // Continue iteration
+        Err(e) => {
+            iter_data.error = Some(e);
+            1 // Stop iteration
         }
     }
 }
@@ -1736,6 +1751,13 @@ mod ffi {
             data: *mut c_void,
             min_txg: u64,
             max_txg: u64,
+        ) -> c_int;
+
+        pub fn zfs_iter_dependents(
+            zhp: *mut ZfsHandle,
+            allowrecursion: c_int, // boolean_t
+            func: extern "C" fn(*mut ZfsHandle, *mut c_void) -> c_int,
+            data: *mut c_void,
         ) -> c_int;
 
         // Property functions
