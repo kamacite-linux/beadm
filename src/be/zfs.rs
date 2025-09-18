@@ -163,7 +163,12 @@ impl Client for LibZfsClient {
         })
     }
 
-    fn destroy(&self, target: &Label, force_unmount: bool, _snapshots: bool) -> Result<(), Error> {
+    fn destroy(
+        &self,
+        target: &Label,
+        force_unmount: bool,
+        destroy_snapshots: bool,
+    ) -> Result<(), Error> {
         let lzh = LibHandle::get();
 
         let dataset = match target {
@@ -206,6 +211,46 @@ impl Client for LibZfsClient {
                         _ = dataset.unmount(&lzh, true);
                     }
                 }
+
+                // If there are any clones of this boot environment, we need to
+                // promote one of them, ideally the oldest one.
+                let mut oldest_clone: Option<DatasetName> = None;
+                let mut oldest_time: i64 = i64::MAX;
+                dataset.iter_snapshots(&lzh, |snapshot| {
+                    // Bail if the boot environment has snapshots but we aren't
+                    // willing to destroy them.
+                    if !destroy_snapshots {
+                        return Err(Error::has_snapshots(name));
+                    }
+
+                    snapshot.iter_clones(&lzh, false, |clone| {
+                        // TODO: Do we need to verify the origin property
+                        // matches here?
+                        if let Some(name) = clone.get_name() {
+                            let creation_time = clone.get_creation_time();
+                            if creation_time < oldest_time {
+                                oldest_time = creation_time;
+                                oldest_clone = Some(name);
+                            }
+                        }
+                        Ok(())
+                    })?;
+
+                    Ok(())
+                })?;
+
+                if let Some(name) = oldest_clone {
+                    let target = Dataset::filesystem(&lzh, &name)?;
+                    target.promote(&lzh)?;
+                }
+
+                // Second pass: actually destroy the snapshots.
+                dataset.iter_snapshots(&lzh, |snapshot| {
+                    if !destroy_snapshots {
+                        return Err(Error::has_snapshots(name));
+                    }
+                    snapshot.destroy(&lzh)
+                })?;
 
                 dataset
             }

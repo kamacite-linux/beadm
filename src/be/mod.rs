@@ -28,6 +28,9 @@ pub enum Error {
     #[error("Cannot destroy active boot environment '{name}'")]
     CannotDestroyActive { name: String },
 
+    #[error("Boot environment '{name}' has snapshots and cannot be destroyed")]
+    HasSnapshots { name: String },
+
     #[error("Invalid boot environment name '{name}': {reason}")]
     InvalidName { name: String, reason: String },
 
@@ -123,6 +126,12 @@ impl Error {
 
     pub fn invalid_root(name: &str) -> Self {
         Error::InvalidBootEnvironmentRoot {
+            name: name.to_string(),
+        }
+    }
+
+    pub fn has_snapshots(name: &str) -> Self {
+        Error::HasSnapshots {
             name: name.to_string(),
         }
     }
