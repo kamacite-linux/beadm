@@ -34,9 +34,9 @@ these tools to Linux, but it does have some notable differences in approach:
   applications that can be distributed via Flakpak.
 
 - Polkit integration for fine-grained permissions and an authorization UI,
-  rather than requiring `sudo` for evey operation.
+  rather than requiring `sudo` for every operation.
 
-- Linux package manager integration.
+- APT and APK package manager integration.
 
 ## Installation
 
@@ -52,14 +52,14 @@ meson install -C build
 Where `meson install` usually requires escalated privileges.
 
 Several features (including D-Bus and systemd integration) are enabled by
-default if the host system supports these tools.
+default if the host system supports these tools. See `meson_options.txt` for
+all possible options.
 
 Note: for distros with an older version of Polkit, policy files installed to
 `/usr/local/share` may not be picked up correctly. Creating a symlink can
 alleviate this:
 
-```bash
-# ln -s /usr/local/share/polkit-1/actions/ca.kamacite.BootEnvironments1.policy \
+```sh
+$ ln -s /usr/local/share/polkit-1/actions/ca.kamacite.BootEnvironments1.policy \
   /usr/share/polkit-1/actions/ca.kamacite.BootEnvironments1.policy
 ```
-
