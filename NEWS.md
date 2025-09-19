@@ -1,3 +1,5 @@
+# beadm (development version)
+
 # beadm v0.2.0
 
 * When compiled with D-Bus support, all non-`daemon` subcommands now attempt to
