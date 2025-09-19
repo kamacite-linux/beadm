@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 #[cfg(feature = "dbus")]
 use async_io::block_on;
-use chrono::{Local, TimeZone};
+use chrono::TimeZone;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs;
 use std::path::PathBuf;
@@ -354,9 +354,17 @@ fn format_active_flags(be: &BootEnvironment) -> Option<String> {
 }
 
 fn format_timestamp(timestamp: i64) -> String {
-    match Local.timestamp_opt(timestamp, 0) {
-        chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
-        _ => format!("{}", timestamp), // Fallback to raw timestamp if conversion fails
+    // Always use UTC for unit tests.
+    if cfg!(test) {
+        match chrono::Utc.timestamp_opt(timestamp, 0) {
+            chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+            _ => format!("{}", timestamp),
+        }
+    } else {
+        match chrono::Local.timestamp_opt(timestamp, 0) {
+            chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+            _ => format!("{}", timestamp),
+        }
     }
 }
 
@@ -801,8 +809,8 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).unwrap(),
             r"NAME     ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
-default  NR      /           906M   2021-06-10 01:09  -
-alt      -       -           8K     2021-06-10 02:11  Testing
+default  NR      /           906M   2021-06-10 05:09  -
+alt      -       -           8K     2021-06-10 06:11  Testing
 "
         );
     }
@@ -1056,11 +1064,11 @@ alt      -       -           8K     2021-06-10 02:11  Testing
         assert_eq!(
             String::from_utf8(output).unwrap(),
             r"NAME                      ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
-default                   NR      /           906M   2021-06-10 01:09  -
-default@2021-06-10-04:30  -       -           395K   2021-06-10 01:30  Automatic snapshot
-default@2021-06-10-05:10  -       -           395K   2021-06-10 02:10  -
-alt                       -       -           8K     2021-06-10 02:11  Testing
-alt@backup                -       -           1K     2021-06-10 02:20  Manual backup
+default                   NR      /           906M   2021-06-10 05:09  -
+default@2021-06-10-04:30  -       -           395K   2021-06-10 05:30  Automatic snapshot
+default@2021-06-10-05:10  -       -           395K   2021-06-10 06:10  -
+alt                       -       -           8K     2021-06-10 06:11  Testing
+alt@backup                -       -           1K     2021-06-10 06:20  Manual backup
 "
         );
 
