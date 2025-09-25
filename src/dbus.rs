@@ -1086,23 +1086,38 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
         zbus::connection::Builder::system()?
     };
 
+    // We don't use the usual zbus builder pattern for all our interfaces here,
+    // because we want `beadm list` to see all the boot environments when it
+    // triggers activation, and that means that we have to populate all of the
+    // objects *before* we request ownership of the well-known name.
+    //
+    // Instead, start by registering the manager.
     let connection = builder
-        .name(SERVICE_NAME)?
         .serve_at(BOOT_ENV_PATH, BootEnvironmentManager::new(client.clone()))?
-        .serve_at(BOOT_ENV_PATH, zbus::fdo::ObjectManager)?
         .build()
         .await?;
 
-    let bus = if use_session_bus { "session" } else { "system" };
-    tracing::info!(service_name = SERVICE_NAME, bus, "D-Bus service started");
-
-    // Initial population of objects
+    // Populate the tree of boot environment objects.
     let iface_ref = connection
         .object_server()
         .interface::<_, BootEnvironmentManager>(BOOT_ENV_PATH)
         .await?;
     let manager = iface_ref.get().await;
     manager.refresh(&connection.object_server()).await?;
+
+    // Add the ObjectManager interface *after* the initial population of boot
+    // environment objects to avoid emitting signals before anyone is listening
+    // to them.
+    connection
+        .object_server()
+        .at(BOOT_ENV_PATH, zbus::fdo::ObjectManager)
+        .await?;
+
+    // Finally, request ownership of the well-known name.
+    connection.request_name(SERVICE_NAME).await?;
+
+    let bus = if use_session_bus { "session" } else { "system" };
+    tracing::info!(service_name = SERVICE_NAME, bus, "D-Bus service started");
 
     // Keep the connection alive and periodically refresh objects in case they
     // are changed out from under us (by e.g. a direct zfs CLI call).

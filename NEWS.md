@@ -4,6 +4,8 @@
   communicate over D-Bus before falling back to `libzfs`. Pass `--client=libzfs`
   to override this behaviour.
 
+* `beadm list` now works correctly if the D-Bus service has to be activated.
+
 # beadm v0.1.0
 
 `beadm` is a tool for managing ZFS boot environments on Linux. It is largely
