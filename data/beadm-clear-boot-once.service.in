@@ -7,7 +7,7 @@ ConditionPathExists=/dev/zfs
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=@bindir@/beadm activate -T
+ExecStart=@bindir@/beadm --client=libzfs activate -T
 
 [Install]
 WantedBy=multi-user.target

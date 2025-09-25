@@ -29,6 +29,13 @@ impl LibZfsClient {
         Self { root }
     }
 
+    /// A client using the boot environment root determined from the active boot
+    /// environment.
+    pub fn from_active_root() -> Result<Self, Error> {
+        let root = get_active_boot_environment_root()?;
+        Ok(Self { root })
+    }
+
     /// Get the filesystem (if any) that will be active on next boot for the
     /// pool backing the boot environment root.
     fn get_next_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
@@ -1502,7 +1509,7 @@ fn get_rootfs() -> Result<Option<DatasetName>, Error> {
 
 // Gets the parent dataset of the active boot environment, provided it exists
 // and looks valid.
-pub fn get_active_boot_environment_root() -> Result<DatasetName, Error> {
+fn get_active_boot_environment_root() -> Result<DatasetName, Error> {
     // We're looking for a ZFS filesystem layout that looks like the
     // following:
     //

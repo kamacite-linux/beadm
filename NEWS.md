@@ -1,5 +1,9 @@
 # beadm (development version)
 
+* When compiled with D-Bus support, all non-`daemon` subcommands now attempt to
+  communicate over D-Bus before falling back to `libzfs`. Pass `--client=libzfs`
+  to override this behaviour.
+
 # beadm v0.1.0
 
 `beadm` is a tool for managing ZFS boot environments on Linux. It is largely

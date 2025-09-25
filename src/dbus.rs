@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use tracing;
 use tracing_subscriber;
 use zbus::object_server::SignalEmitter;
-use zbus::{Connection, blocking, interface};
+use zbus::{blocking, interface};
 use zvariant::ObjectPath;
 
 // D-Bus service constants
@@ -35,10 +35,21 @@ pub struct ClientProxy {
 }
 
 impl ClientProxy {
-    pub fn new(connection: Connection) -> Result<Self, BeError> {
-        Ok(Self {
-            connection: connection.into(),
-        })
+    /// Connect to the beadm D-Bus service or return an error if either the
+    /// service or D-Bus itself is unavailable.
+    ///
+    /// This will also ping the D-Bus service to check if it's available.
+    pub fn new() -> Result<Self, BeError> {
+        // This is equivalent to async_io::block_on(zbus::Connection::system())?.
+        let connection = zbus::blocking::Connection::system()?;
+        connection.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some("org.freedesktop.DBus.Peer"),
+            "Ping",
+            &(),
+        )?;
+        Ok(Self { connection })
     }
 }
 

@@ -1,6 +1,6 @@
 # clear temporary boot environment activations
 
 type = scripted
-command = @bindir@/beadm activate -T
+command = @bindir@/beadm --client=libzfs activate -T
 depends-on = early-fs-local.target
 before = local.target

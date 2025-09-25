@@ -211,10 +211,12 @@ same installation) on a single system.
 	Enable verbose output.
 
 *--client* _type_
-	Select the client implementation to use. Valid values are:
-	- _libzfs_: Use LibZFS directly (default)
-	- _mock_: Use a mock/emulator client for testing
-	- _dbus_: Use the D-Bus client (if compiled with D-Bus support)
+	One of:
+	- _default_: Use the D-Bus service when available or libzfs otherwise.
+	- _dbus_: Use the D-Bus service (if compiled with D-Bus support).
+	- _libzfs_: Use libzfs directly.
+
+	For *beadm daemon* only --client=_libzfs_ is valid and other values are ignored.
 
 # OUTPUT FORMAT
 

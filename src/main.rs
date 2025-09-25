@@ -19,7 +19,7 @@ mod dbus;
 mod hooks;
 
 use be::mock::EmulatorClient;
-use be::zfs::{DatasetName, LibZfsClient, format_zfs_bytes, get_active_boot_environment_root};
+use be::zfs::{DatasetName, LibZfsClient, format_zfs_bytes};
 use be::{BootEnvironment, Client, Error, Label, MountMode, Snapshot};
 #[cfg(feature = "dbus")]
 use dbus::{ClientProxy, serve};
@@ -44,7 +44,7 @@ struct Cli {
         long = "client",
         global = true,
         help_heading = "Global options",
-        default_value = "libzfs"
+        default_value = "default"
     )]
     client: ClientType,
 
@@ -270,6 +270,9 @@ enum SortField {
 /// Client selection.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum ClientType {
+    /// Use the D-Bus client when available or LibZFS otherwise.
+    #[value(name = "default")]
+    Default,
     /// Use the D-Bus client.
     #[cfg(feature = "dbus")]
     #[value(name = "dbus")]
@@ -756,32 +759,55 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    // It doesn't make sense to run the daemon using the D-Bus proxy.
+    if let Commands::Daemon { .. } = cli.command {
+        if cli.client != ClientType::Mock {
+            cli.client = ClientType::LibZfs;
+        }
+    }
 
     match cli.client {
         ClientType::Mock => {
             let client = EmulatorClient::sampled();
-            execute_command(&cli.command, client)?;
+            execute_command(&cli.command, client)
         }
-        #[cfg(feature = "dbus")]
-        ClientType::DBus => {
-            // Use the system bus by default.
-            let connection = block_on(zbus::Connection::system())?;
-            let client = ClientProxy::new(connection)?;
-            execute_command(&cli.command, client)?;
-        }
-        ClientType::LibZfs => {
-            let root = match cli.beroot {
-                Some(value) => DatasetName::new(&value)?,
-                None => get_active_boot_environment_root().context(
+        ClientType::Default => {
+            // When the client type is "default", we check if the D-Bus service
+            // is available but don't emit errors if it's not.
+            #[cfg(feature = "dbus")]
+            if let Ok(client) = ClientProxy::new() {
+                return execute_command(&cli.command, client);
+            } else if cli.verbose {
+                println!("D-Bus service not available, falling back to libzfs.");
+            }
+
+            // Otherwise we fall back to using libzfs.
+            let client = match cli.beroot {
+                Some(value) => LibZfsClient::new(DatasetName::new(&value)?),
+                None => LibZfsClient::from_active_root().context(
                     "Failed to determine the default boot environment root. Consider using the --beroot option.",
                 )?,
             };
-            execute_command(&cli.command, LibZfsClient::new(root))?;
+            execute_command(&cli.command, client)
+        }
+        #[cfg(feature = "dbus")]
+        ClientType::DBus => {
+            // When the client type is explicitly "dbus", errors are fatal.
+            let client = ClientProxy::new()?;
+            execute_command(&cli.command, client)
+        }
+        ClientType::LibZfs => {
+            let client = match cli.beroot {
+                Some(value) => LibZfsClient::new(DatasetName::new(&value)?),
+                None => LibZfsClient::from_active_root().context(
+                    "Failed to determine the default boot environment root. Consider using the --beroot option.",
+                )?,
+            };
+            execute_command(&cli.command, client)
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
