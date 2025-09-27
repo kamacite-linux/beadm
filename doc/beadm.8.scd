@@ -198,7 +198,8 @@ same installation) on a single system.
 
 *daemon*
 
-	Start the boot environment D-Bus daemon.
+	Start the boot environment D-Bus daemon. It will terminate automatically after
+	five minutes of inactivity.
 
 # GLOBAL OPTIONS
 

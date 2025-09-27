@@ -6,6 +6,7 @@
 
 use crate::be::Error as BeError;
 use crate::be::{BootEnvironment, Client, Label, MountMode, Snapshot};
+use event_listener::Listener;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -1119,14 +1120,30 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
     let bus = if use_session_bus { "session" } else { "system" };
     tracing::info!(service_name = SERVICE_NAME, bus, "D-Bus service started");
 
-    // Keep the connection alive and periodically refresh objects in case they
-    // are changed out from under us (by e.g. a direct zfs CLI call).
-    loop {
-        async_io::Timer::after(std::time::Duration::from_secs(60)).await;
+    // Wait up to five minutes of inactivity before shutting down again.
+    let mut idle_count = 0;
+    while idle_count < 5 {
+        if connection
+            .monitor_activity()
+            .wait_timeout(std::time::Duration::from_secs(60))
+            .is_none()
+        {
+            idle_count += 1;
+        } else {
+            tracing::trace!("Activity detected, reseting idle timeout");
+            idle_count = 0;
+        }
+        // Periodically refresh objects in case they are changed out from under
+        // us (by e.g. a direct zfs CLI call).
         if let Err(e) = manager.refresh(&connection.object_server()).await {
             tracing::error!("Error refreshing objects: {}", e);
         }
     }
+    tracing::info!(
+        service_name = SERVICE_NAME,
+        "D-Bus service stopping due to inactivity"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

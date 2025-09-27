@@ -6,6 +6,8 @@
 
 * `beadm list` now works correctly if the D-Bus service has to be activated.
 
+* `beadm daemon` now shuts down automatically after five minutes of inactivity.
+
 # beadm v0.1.0
 
 `beadm` is a tool for managing ZFS boot environments on Linux. It is largely
