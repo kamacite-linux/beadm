@@ -1143,6 +1143,11 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
         service_name = SERVICE_NAME,
         "D-Bus service stopping due to inactivity"
     );
+    // Emulate systemd's bus_event_loop_with_idle() and notify that we're
+    // stopping before releasing the name. Apparently this results in better
+    // queuing behaviour.
+    let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Stopping]);
+    connection.release_name(SERVICE_NAME).await?;
     Ok(())
 }
 
