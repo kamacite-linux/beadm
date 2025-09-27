@@ -5,8 +5,6 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use anyhow::{Context, Result};
-#[cfg(feature = "dbus")]
-use async_io::block_on;
 use chrono::TimeZone;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs;
@@ -747,7 +745,13 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         }
         #[cfg(feature = "dbus")]
         Commands::Daemon { user } => {
-            block_on(serve(client, *user)).context("Failed to start D-Bus service")?;
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("launch of a multi-threaded tokio runtime")
+                .block_on(serve(client, *user))
+                .context("Failed to start D-Bus service")?;
             Ok(())
         }
         #[cfg(feature = "hooks")]
