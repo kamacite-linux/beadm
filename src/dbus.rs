@@ -655,9 +655,9 @@ pub struct BootEnvironmentManager {
 }
 
 impl BootEnvironmentManager {
-    pub fn new(client: Arc<dyn Client>) -> Self {
+    pub fn new<T: Client + 'static>(client: T) -> Self {
         Self {
-            client,
+            client: Arc::new(client),
             guids: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -1079,8 +1079,6 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
         .event_format(tracing_subscriber::fmt::format().with_ansi(false).compact())
         .init();
 
-    let client: Arc<dyn Client> = Arc::new(client);
-
     let builder = if use_session_bus {
         zbus::connection::Builder::session()?
     } else {
@@ -1094,7 +1092,7 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
     //
     // Instead, start by registering the manager.
     let connection = builder
-        .serve_at(BOOT_ENV_PATH, BootEnvironmentManager::new(client.clone()))?
+        .serve_at(BOOT_ENV_PATH, BootEnvironmentManager::new(client))?
         .build()
         .await?;
 
