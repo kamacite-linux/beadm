@@ -1210,13 +1210,13 @@ impl Drop for Zpool {
 
 // Convenience type for already-validated ZFS dataset names that can be passed
 // directly to the FFI layer.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatasetName {
     inner: CString,
 }
 
 impl DatasetName {
-    pub fn new(name: &str) -> Result<Self, Error> {
+    fn new(name: &str) -> Result<Self, Error> {
         validate_dataset_name(name)?;
         Ok(Self {
             inner: CString::new(name).unwrap(),
@@ -1307,6 +1307,14 @@ impl DatasetName {
             // No parent (this is a pool root dataset).
             None
         }
+    }
+}
+
+impl std::str::FromStr for DatasetName {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
     }
 }
 

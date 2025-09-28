@@ -31,7 +31,7 @@ struct Cli {
     /// environments. Defaults to the parent dataset of the active boot
     /// environment.
     #[arg(short = 'r', global = true, help_heading = "Global options")]
-    beroot: Option<String>,
+    beroot: Option<DatasetName>,
 
     /// Verbose output
     #[arg(short = 'v', global = true, help_heading = "Global options")]
@@ -789,7 +789,7 @@ fn main() -> Result<()> {
 
             // Otherwise we fall back to using libzfs.
             let client = match cli.beroot {
-                Some(value) => LibZfsClient::new(DatasetName::new(&value)?),
+                Some(root) => LibZfsClient::new(root),
                 None => LibZfsClient::from_active_root().context(
                     "Failed to determine the default boot environment root. Consider using the --beroot option.",
                 )?,
@@ -804,7 +804,7 @@ fn main() -> Result<()> {
         }
         ClientType::LibZfs => {
             let client = match cli.beroot {
-                Some(value) => LibZfsClient::new(DatasetName::new(&value)?),
+                Some(root) => LibZfsClient::new(root),
                 None => LibZfsClient::from_active_root().context(
                     "Failed to determine the default boot environment root. Consider using the --beroot option.",
                 )?,
