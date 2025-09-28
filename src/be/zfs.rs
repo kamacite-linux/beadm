@@ -13,7 +13,9 @@ use std::ptr;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use super::validation::{validate_component, validate_dataset_name};
-use super::{BootEnvironment, Client, Error, Label, MountMode, Snapshot, generate_snapshot_name};
+use super::{
+    BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot, generate_snapshot_name,
+};
 
 const DESCRIPTION_PROP: &str = "ca.kamacite:description";
 const PREVIOUS_BOOTFS_PROP: &str = "ca.kamacite:previous-bootfs";
@@ -25,8 +27,10 @@ pub struct LibZfsClient {
 
 impl LibZfsClient {
     /// Create a new client with the specified boot environment root.
-    pub fn new(root: DatasetName) -> Self {
-        Self { root }
+    pub fn new(root: Root) -> Self {
+        Self {
+            root: root.to_dataset(),
+        }
     }
 
     /// A client using the boot environment root determined from the active boot

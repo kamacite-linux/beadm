@@ -5,7 +5,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use clap::ValueEnum;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 use thiserror::Error as ThisError;
 #[cfg(feature = "dbus")]
 use zvariant::{DeserializeDict, SerializeDict, Type};
@@ -204,7 +207,7 @@ pub enum Label {
     Snapshot(String, String),
 }
 
-impl std::str::FromStr for Label {
+impl FromStr for Label {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -246,6 +249,37 @@ impl std::fmt::Display for Label {
             Label::Name(name) => write!(f, "{}", name),
             Label::Snapshot(name, snapshot) => write!(f, "{}@{}", name, snapshot),
         }
+    }
+}
+
+/// A "boot environment root", i.e. a dataset whose children are all boot
+/// environments.
+#[derive(Clone)]
+pub struct Root {
+    path: String,
+}
+
+impl Root {
+    pub(crate) fn to_dataset(&self) -> zfs::DatasetName {
+        // SAFETY: Safe to unwrap because we've already validated the name as a dataset.
+        zfs::DatasetName::from_str(&self.path).unwrap()
+    }
+}
+
+impl FromStr for Root {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains("@") {
+            return Err(Error::InvalidName {
+                name: s.to_string(),
+                reason: "cannot contain '@'".to_string(),
+            });
+        }
+        validation::validate_dataset_name(s)?;
+        Ok(Root {
+            path: s.to_string(),
+        })
     }
 }
 

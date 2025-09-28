@@ -17,8 +17,8 @@ mod dbus;
 mod hooks;
 
 use be::mock::EmulatorClient;
-use be::zfs::{DatasetName, LibZfsClient, format_zfs_bytes};
-use be::{BootEnvironment, Client, Error, Label, MountMode, Snapshot};
+use be::zfs::{LibZfsClient, format_zfs_bytes};
+use be::{BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot};
 #[cfg(feature = "dbus")]
 use dbus::{ClientProxy, serve};
 
@@ -31,7 +31,7 @@ struct Cli {
     /// environments. Defaults to the parent dataset of the active boot
     /// environment.
     #[arg(short = 'r', global = true, help_heading = "Global options")]
-    beroot: Option<DatasetName>,
+    beroot: Option<Root>,
 
     /// Verbose output
     #[arg(short = 'v', global = true, help_heading = "Global options")]
