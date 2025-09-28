@@ -227,10 +227,14 @@ impl Client for EmulatorClient {
             };
 
             // Check if it's already mounted
-            if be.mountpoint.is_some() {
+            if let Some(ref existing) = be.mountpoint {
+                if existing == &PathBuf::from(mountpoint) {
+                    // We're already done.
+                    return Ok(());
+                }
                 return Err(Error::Mounted {
                     name: be_name.to_string(),
-                    mountpoint: be.mountpoint.as_ref().unwrap().display().to_string(),
+                    mountpoint: existing.display().to_string(),
                 });
             }
 
