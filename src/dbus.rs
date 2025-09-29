@@ -8,7 +8,7 @@ use crate::be::Error as BeError;
 use crate::be::{BootEnvironment, Client, Label, MountMode, Snapshot};
 use event_listener::Listener;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use tracing;
 use tracing_subscriber;
@@ -127,19 +127,29 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), BeError> {
+    fn mount(
+        &self,
+        be_name: &str,
+        mountpoint: Option<&Path>,
+        mode: MountMode,
+    ) -> Result<PathBuf, BeError> {
         let read_only = match mode {
             MountMode::ReadOnly => true,
             MountMode::ReadWrite => false,
         };
-        self.connection.call_method(
-            Some(SERVICE_NAME),
-            BOOT_ENV_PATH,
-            Some(MANAGER_INTERFACE),
-            "Mount",
-            &(be_name, mountpoint, read_only),
-        )?;
-        Ok(())
+        let mountpoint = mountpoint.map_or("".to_string(), |mp| mp.to_string_lossy().to_string());
+        let result: PathBuf = self
+            .connection
+            .call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some(MANAGER_INTERFACE),
+                "Mount",
+                &(be_name, mountpoint, read_only),
+            )?
+            .body()
+            .deserialize()?;
+        Ok(result)
     }
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, BeError> {
@@ -533,9 +543,21 @@ impl BootEnvironmentObject {
         } else {
             MountMode::ReadWrite
         };
+        let mountpoint = if mountpoint.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(mountpoint))
+        };
         let name = &self.data.read().unwrap().name;
-        self.client.mount(name, mountpoint, mode)?;
-        tracing::info!(name, mountpoint, read_only, "Mounted boot environment");
+        let result = self
+            .client
+            .mount(name, mountpoint.as_ref().map(|mp| mp.as_path()), mode)?;
+        tracing::info!(
+            name,
+            mountpoint = result.display().to_string(),
+            read_only,
+            "Mounted boot environment"
+        );
         Ok(())
     }
 
@@ -883,13 +905,14 @@ impl BootEnvironmentManager {
     }
 
     /// Mount a boot environment.
+    #[zbus(out_args("mountpoint"))]
     async fn mount(
         &self,
         name: &str,
         mountpoint: &str,
         read_only: bool,
         #[zbus(connection)] conn: &zbus::Connection,
-    ) -> zbus::fdo::Result<()> {
+    ) -> zbus::fdo::Result<PathBuf> {
         // Note: this is not a privileged operation (yet), because mounting a
         // boot environment doesn't give you any more permissions to modify it
         // than you already have.
@@ -898,10 +921,22 @@ impl BootEnvironmentManager {
         } else {
             MountMode::ReadWrite
         };
-        self.client.mount(name, mountpoint, mode)?;
-        tracing::info!(name, mountpoint, read_only, "Mounted boot environment");
+        let mountpoint = if mountpoint.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(mountpoint))
+        };
+        let result = self
+            .client
+            .mount(name, mountpoint.as_ref().map(|mp| mp.as_path()), mode)?;
+        tracing::info!(
+            name,
+            mountpoint = result.display().to_string(),
+            read_only,
+            "Mounted boot environment"
+        );
         self.refresh(conn.object_server()).await?;
-        Ok(())
+        Ok(result)
     }
 
     /// Unmount an inactive boot environment.

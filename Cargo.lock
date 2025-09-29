@@ -265,6 +265,7 @@ dependencies = [
  "chrono",
  "clap",
  "event-listener",
+ "getrandom",
  "libc",
  "sd-notify",
  "serde",

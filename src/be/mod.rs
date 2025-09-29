@@ -302,7 +302,12 @@ pub trait Client: Send + Sync {
 
     fn destroy(&self, target: &Label, force_unmount: bool, snapshots: bool) -> Result<(), Error>;
 
-    fn mount(&self, be_name: &str, mountpoint: &str, mode: MountMode) -> Result<(), Error>;
+    fn mount(
+        &self,
+        be_name: &str,
+        mountpoint: Option<&Path>,
+        mode: MountMode,
+    ) -> Result<PathBuf, Error>;
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error>;
 
@@ -343,4 +348,56 @@ pub trait Client: Send + Sync {
 pub(crate) fn generate_snapshot_name() -> String {
     // Currently an RFC 3339-style timestamp.
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Generate (but do not create) a temporary mountpoint directory name for a
+/// boot environment.
+pub(crate) fn generate_temp_mountpoint() -> PathBuf {
+    // Use a two-character alphanumeric directory name. 36x36 possible
+    // combinations seems like plenty, and this way it fits into the MOUNTPOINT
+    // column of `beadm list` nicely.
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut tempname = String::with_capacity(2);
+    loop {
+        for _ in 0..2 {
+            // SAFETY: If we can't generate a random number, it is the perfect
+            // time to panic.
+            let index: usize = (getrandom::u64().unwrap() as usize) % CHARS.len();
+            tempname.push(CHARS[index] as char);
+        }
+        let path = PathBuf::from(format!("/run/be/{}", tempname));
+        if !path.exists() {
+            return path;
+        }
+        tempname.clear();
+    }
+}
+
+/// Check if a mountpoint directory looks like one of our temporary ones.
+pub(crate) fn is_temp_mountpoint(path: &PathBuf) -> bool {
+    if path.starts_with(std::path::Path::new("/run/be")) {
+        return true;
+    }
+    // Check the old tempfile approach in case beadm was updated while some
+    // mounts were already in place.
+    let prefix = std::env::temp_dir().join("be_mount.");
+    // Safe to unwrap because we know the prefix is valid UTF-8.
+    path.to_string_lossy().starts_with(prefix.to_str().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_temp_mountpoints() {
+        let generated = generate_temp_mountpoint();
+        assert!(is_temp_mountpoint(&generated));
+        assert!(is_temp_mountpoint(&PathBuf::from("/run/be/mounted")));
+        assert!(is_temp_mountpoint(
+            &std::env::temp_dir().join("be_mount.abc123")
+        ));
+        assert!(!is_temp_mountpoint(&PathBuf::from("/mnt/custom")));
+        assert!(!is_temp_mountpoint(&PathBuf::from("/")));
+    }
 }

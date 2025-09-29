@@ -18,7 +18,7 @@ mod hooks;
 
 use be::mock::EmulatorClient;
 use be::zfs::{LibZfsClient, format_zfs_bytes};
-use be::{BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot};
+use be::{BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot, is_temp_mountpoint};
 #[cfg(feature = "dbus")]
 use dbus::{ClientProxy, serve};
 
@@ -185,7 +185,7 @@ enum Commands {
 
         /// A mount point (if omitted, creates a temporary mount in /tmp).
         #[arg(value_hint = clap::ValueHint::DirPath)]
-        mountpoint: Option<String>,
+        mountpoint: Option<PathBuf>,
 
         /// Mount as read/write or read-only.
         #[arg(short = 's', default_value = "rw")]
@@ -498,13 +498,6 @@ fn print_boot_environments<T: Client>(
     Ok(())
 }
 
-/// Check if a mountpoint path looks like one of our temporary ones.
-fn is_temp_mountpoint(path: &PathBuf) -> bool {
-    let prefix = std::env::temp_dir().join("be_mount.");
-    // Safe to unwrap because we know the prefix is valid UTF-8.
-    path.to_string_lossy().starts_with(prefix.to_str().unwrap())
-}
-
 /// Parse the `PRETTY_NAME` field from an `/etc/os-release`-style file.
 fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String> {
     let content = fs::read_to_string(path)?;
@@ -630,38 +623,18 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             mountpoint,
             mode,
         } => {
-            if let Some(mountpoint) = mountpoint {
-                client
-                    .mount(be_name, mountpoint, *mode)
-                    .context("Failed to mount boot environment")?;
-                return Ok(());
+            let mp = client
+                .mount(be_name, mountpoint.as_ref().map(|mp| mp.as_path()), *mode)
+                .context("Failed to mount boot environment")?;
+            if is_temp_mountpoint(&mp) {
+                println!("{}", mp.display());
             }
-
-            // If no mountpoint is specified, create a temporary one and write
-            // it to standard output for downstream consumption.
-            let mut temp_dir = tempfile::TempDir::with_prefix("be_mount.")
-                .context("Failed to create temporary mountpoint directory")?;
-            let temp_path = temp_dir.path().to_string_lossy().to_string();
-            client
-                .mount(be_name, &temp_path, *mode)
-                .context("Failed to mount boot environment at temporary path")?;
-            temp_dir.disable_cleanup(true);
-            println!("{}", temp_path);
             Ok(())
         }
         Commands::Unmount { be_name, force } => {
-            let mountpoint = client
+            client
                 .unmount(be_name, *force)
                 .context("Failed to unmount boot environment")?;
-
-            // Check for temporary mountpoints we need to clean up.
-            if let Some(mp) = mountpoint {
-                if is_temp_mountpoint(&mp) {
-                    std::fs::remove_dir_all(&mp)
-                        .context("Failed to clean up temporary mountpoint")?;
-                }
-            }
-
             Ok(())
         }
         Commands::Rename { be_name, new_name } => {
@@ -952,15 +925,6 @@ alt      -       -           8K     2021-06-10 06:11  Testing
     }
 
     #[test]
-    fn test_is_temp_mountpoint() {
-        assert!(is_temp_mountpoint(
-            &std::env::temp_dir().join("be_mount.abc123")
-        ));
-        assert!(!is_temp_mountpoint(&PathBuf::from("/mnt/custom")));
-        assert!(!is_temp_mountpoint(&PathBuf::from("/")));
-    }
-
-    #[test]
     fn test_hostid_command() {
         let client = EmulatorClient::sampled();
 
@@ -998,7 +962,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let result = execute_command(
             &Commands::Mount {
                 be_name: "alt".to_string(),
-                mountpoint: Some("/mnt/test".to_string()),
+                mountpoint: Some(PathBuf::from("/mnt/test")),
                 mode: MountMode::ReadWrite,
             },
             client,
@@ -1030,7 +994,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let result = execute_command(
             &Commands::Mount {
                 be_name: "non-existent".to_string(),
-                mountpoint: Some("/mnt/test".to_string()),
+                mountpoint: Some(PathBuf::from("/mnt/test")),
                 mode: MountMode::ReadWrite,
             },
             client,
@@ -1046,7 +1010,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let client = EmulatorClient::sampled();
 
         // First mount a BE
-        let mount_result = client.mount("alt", "/mnt/test", MountMode::ReadWrite);
+        let mount_result = client.mount("alt", None, MountMode::ReadWrite);
         assert!(mount_result.is_ok());
 
         // Then unmount it

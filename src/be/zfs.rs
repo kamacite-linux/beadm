@@ -15,6 +15,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use super::validation::{validate_component, validate_dataset_name};
 use super::{
     BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot, generate_snapshot_name,
+    generate_temp_mountpoint, is_temp_mountpoint,
 };
 
 const DESCRIPTION_PROP: &str = "ca.kamacite:description";
@@ -297,7 +298,12 @@ impl Client for LibZfsClient {
         dataset.destroy(&lzh)
     }
 
-    fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
+    fn mount(
+        &self,
+        be_name: &str,
+        mountpoint: Option<&Path>,
+        _mode: MountMode,
+    ) -> Result<PathBuf, Error> {
         let be_path = self.root.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
@@ -305,15 +311,27 @@ impl Client for LibZfsClient {
         // Check if it's already mounted. Otherwise zfs_mount_at() seems to
         // create a second mountpoint, which is not ideal.
         if let Some(existing) = dataset.get_mountpoint() {
-            if existing == PathBuf::from(mountpoint) {
+            if mountpoint.map_or_else(|| false, |mp| mp == existing) {
                 // We're already done.
-                return Ok(());
+                return Ok(existing);
             }
             return Err(Error::mounted(be_name, &existing));
         }
 
+        let mountpoint = if let Some(mp) = mountpoint {
+            mp.to_path_buf()
+        } else {
+            // Note: we only create mountpoint directories if we generate them.
+            // Otherwise users might use beadm's escalated privileges to create
+            // directories they wouldn't normally be able to.
+            let mp = generate_temp_mountpoint();
+            std::fs::create_dir_all(&mp)?;
+            mp
+        };
+
         // TODO: Support recursively mounting child datasets.
-        dataset.mount_at(&lzh, mountpoint)
+        dataset.mount_at(&lzh, mountpoint.as_os_str())?;
+        Ok(mountpoint)
     }
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error> {
@@ -321,15 +339,19 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
 
-        // Get the mountpoint before unmounting
-        let mountpoint = dataset.get_mountpoint();
-        if mountpoint.is_none() {
-            return Ok(None);
-        }
+        match dataset.get_mountpoint() {
+            None => Ok(None), // Nothing to do.
+            Some(mountpoint) => {
+                // TODO: Support recursively unmounting child datasets.
+                dataset.unmount(&lzh, force)?;
 
-        // TODO: Support recursively unmounting child datasets.
-        dataset.unmount(&lzh, force)?;
-        Ok(mountpoint)
+                // Clean up the mountpoint if we created it.
+                if is_temp_mountpoint(&mountpoint) {
+                    std::fs::remove_dir(&mountpoint)?;
+                }
+                Ok(Some(mountpoint))
+            }
+        }
     }
 
     fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
@@ -775,9 +797,9 @@ impl Dataset {
     }
 
     /// Mount this dataset at the specified path.
-    pub fn mount_at(&self, lzh: &LibHandle, mountpoint: &str) -> Result<(), Error> {
-        let c_mountpoint = CString::new(mountpoint).map_err(|_| Error::InvalidPath {
-            path: mountpoint.to_string(),
+    pub fn mount_at(&self, lzh: &LibHandle, mountpoint: &OsStr) -> Result<(), Error> {
+        let c_mountpoint = CString::new(mountpoint.as_bytes()).map_err(|_| Error::InvalidPath {
+            path: mountpoint.display().to_string(),
         })?;
         let result =
             unsafe { ffi::zfs_mount_at(self.handle, ptr::null(), 0, c_mountpoint.as_ptr()) };

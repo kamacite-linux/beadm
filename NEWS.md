@@ -8,6 +8,9 @@
 
 * `beadm daemon` now shuts down automatically after five minutes of inactivity.
 
+* `beadm mount` will now create mountpoints in `/run/be` rather than `/tmp` when
+  no mountpoint is supplied by the user.
+
 # beadm v0.1.0
 
 `beadm` is a tool for managing ZFS boot environments on Linux. It is largely

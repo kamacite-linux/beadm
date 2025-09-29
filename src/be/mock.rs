@@ -7,11 +7,14 @@
 use chrono::Utc;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use super::validation::{validate_be_name, validate_component};
-use super::{BootEnvironment, Client, Error, Label, MountMode, Snapshot, generate_snapshot_name};
+use super::{
+    BootEnvironment, Client, Error, Label, MountMode, Snapshot, generate_snapshot_name,
+    generate_temp_mountpoint,
+};
 
 /// A boot environment client populated with static data that operates
 /// entirely in-memory with no side effects.
@@ -211,53 +214,57 @@ impl Client for EmulatorClient {
         }
     }
 
-    fn mount(&self, be_name: &str, mountpoint: &str, _mode: MountMode) -> Result<(), Error> {
-        // First, validate preconditions with immutable borrow
-        {
-            let bes = self.bes.read().unwrap();
+    fn mount(
+        &self,
+        be_name: &str,
+        mountpoint: Option<&Path>,
+        _mode: MountMode,
+    ) -> Result<PathBuf, Error> {
+        let mut bes = self.bes.write().unwrap();
 
-            // Find the boot environment
-            let be = match bes.iter().find(|be| be.name == be_name) {
-                Some(be) => be,
-                None => {
-                    return Err(Error::NotFound {
-                        name: be_name.to_string(),
-                    });
-                }
-            };
-
-            // Check if it's already mounted
-            if let Some(ref existing) = be.mountpoint {
-                if existing == &PathBuf::from(mountpoint) {
-                    // We're already done.
-                    return Ok(());
-                }
-                return Err(Error::Mounted {
+        // Find the boot environment
+        let be = match bes.iter().find(|be| be.name == be_name) {
+            Some(be) => be,
+            None => {
+                return Err(Error::NotFound {
                     name: be_name.to_string(),
-                    mountpoint: existing.display().to_string(),
                 });
             }
+        };
 
+        // Check if it's already mounted
+        if let Some(ref existing) = be.mountpoint {
+            if mountpoint.map_or_else(|| false, |mp| mp == existing) {
+                // We're already done.
+                return Ok(existing.clone());
+            }
+            return Err(Error::Mounted {
+                name: be_name.to_string(),
+                mountpoint: existing.display().to_string(),
+            });
+        }
+
+        let mountpoint = if let Some(mp) = mountpoint {
             // Check if another BE is already mounted at this path
             if bes.iter().any(|other_be| {
                 other_be
                     .mountpoint
                     .as_ref()
-                    .map_or(false, |mp| mp.display().to_string() == mountpoint)
+                    .map_or(false, |existing| existing == mp)
             }) {
                 return Err(Error::MountPointInUse {
-                    path: mountpoint.to_string(),
+                    path: mp.display().to_string(),
                 });
             }
-        } // Release immutable borrow
+            mp.to_path_buf()
+        } else {
+            // Note: this won't actually create the directory.
+            generate_temp_mountpoint()
+        };
 
-        // Now perform the mount with mutable borrow
-        let mut bes = self.bes.write().unwrap();
-        if let Some(be) = bes.iter_mut().find(|be| be.name == be_name) {
-            be.mountpoint = Some(std::path::PathBuf::from(mountpoint));
-        }
-
-        Ok(())
+        let be = bes.iter_mut().find(|be| be.name == be_name).unwrap();
+        be.mountpoint = Some(mountpoint.clone());
+        Ok(mountpoint)
     }
 
     fn unmount(&self, target: &str, _force: bool) -> Result<Option<PathBuf>, Error> {
@@ -763,7 +770,8 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Mount the BE
-        let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
+        let path = PathBuf::from("/mnt/test");
+        let result = client.mount("test-be", Some(path.as_path()), MountMode::ReadWrite);
         assert!(result.is_ok());
 
         // Verify it's mounted
@@ -777,7 +785,7 @@ mod tests {
     #[test]
     fn test_emulated_mount_not_found() {
         let client = EmulatorClient::new(vec![]);
-        let result = client.mount("nonexistent", "/mnt/test", MountMode::ReadWrite);
+        let result = client.mount("nonexistent", None, MountMode::ReadWrite);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -796,7 +804,8 @@ mod tests {
             created: 1623301740,
         };
         let client = EmulatorClient::new(vec![test_be]);
-        let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
+        let path = PathBuf::from("/mnt/test");
+        let result = client.mount("test-be", Some(path.as_path()), MountMode::ReadWrite);
         assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "test-be" && mountpoint == "/mnt/existing"));
     }
@@ -830,7 +839,8 @@ mod tests {
         };
 
         let client = EmulatorClient::new(vec![be1, be2]);
-        let result = client.mount("be2", "/mnt/test", MountMode::ReadWrite);
+        let path = PathBuf::from("/mnt/test");
+        let result = client.mount("be2", Some(path.as_path()), MountMode::ReadWrite);
         assert!(matches!(result, Err(Error::MountPointInUse { path }) if path == "/mnt/test"));
     }
 
@@ -1215,15 +1225,12 @@ mod tests {
         assert!(result.is_ok());
 
         // Mount it
-        let result = client.mount("test-be", "/mnt/test", MountMode::ReadWrite);
+        let result = client.mount("test-be", None, MountMode::ReadWrite);
         assert!(result.is_ok());
 
         // Verify it's mounted
         let bes = client.get_boot_environments().unwrap();
-        assert_eq!(
-            bes[0].mountpoint,
-            Some(std::path::PathBuf::from("/mnt/test"))
-        );
+        assert!(bes[0].mountpoint.is_some());
 
         // Unmount it
         let result = client.unmount("test-be", false);
