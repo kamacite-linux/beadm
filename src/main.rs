@@ -761,13 +761,7 @@ fn main() -> Result<()> {
             }
 
             // Otherwise we fall back to using libzfs.
-            let client = match cli.beroot {
-                Some(root) => LibZfsClient::new(root),
-                None => LibZfsClient::from_active_root().context(
-                    "Failed to determine the default boot environment root. Consider using the --beroot option.",
-                )?,
-            };
-            execute_command(&cli.command, client)
+            execute_command(&cli.command, LibZfsClient::new(cli.beroot))
         }
         #[cfg(feature = "dbus")]
         ClientType::DBus => {
@@ -775,15 +769,7 @@ fn main() -> Result<()> {
             let client = ClientProxy::new()?;
             execute_command(&cli.command, client)
         }
-        ClientType::LibZfs => {
-            let client = match cli.beroot {
-                Some(root) => LibZfsClient::new(root),
-                None => LibZfsClient::from_active_root().context(
-                    "Failed to determine the default boot environment root. Consider using the --beroot option.",
-                )?,
-            };
-            execute_command(&cli.command, client)
-        }
+        ClientType::LibZfs => execute_command(&cli.command, LibZfsClient::new(cli.beroot)),
     }
 }
 

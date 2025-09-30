@@ -23,36 +23,38 @@ const PREVIOUS_BOOTFS_PROP: &str = "ca.kamacite:previous-bootfs";
 
 /// A ZFS boot environment client backed by libzfs.
 pub struct LibZfsClient {
-    root: DatasetName,
+    root: Option<DatasetName>,
 }
 
 impl LibZfsClient {
-    /// Create a new client with the specified boot environment root.
-    pub fn new(root: Root) -> Self {
+    /// Create a new client backed by libzfs.
+    ///
+    /// When `root` is `None`, the boot environment root is determined from the
+    /// active boot environment if possible.
+    pub fn new(root: Option<Root>) -> Self {
         Self {
-            root: root.to_dataset(),
+            root: root
+                .or(get_active_boot_environment_root().ok())
+                .map(|root| root.to_dataset()),
         }
-    }
-
-    /// A client using the boot environment root determined from the active boot
-    /// environment.
-    pub fn from_active_root() -> Result<Self, Error> {
-        let root = get_active_boot_environment_root()?;
-        Ok(Self { root })
     }
 
     /// Get the filesystem (if any) that will be active on next boot for the
     /// pool backing the boot environment root.
     fn get_next_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
-        let zpool = Zpool::open(lzh, &self.root.pool())?;
+        let zpool = Zpool::open(lzh, &self.get_root()?.pool())?;
         Ok(zpool.get_bootfs())
     }
 
     /// Get the filesystem (if any) that was previously active on next boot for
     /// the pool backing the boot environment root.
     fn get_previous_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
-        let zpool = Zpool::open(lzh, &self.root.pool())?;
+        let zpool = Zpool::open(lzh, &self.get_root()?.pool())?;
         Ok(zpool.get_previous_bootfs())
+    }
+
+    fn get_root(&self) -> Result<&DatasetName, Error> {
+        self.root.as_ref().ok_or(Error::NoActiveBootEnvironment)
     }
 }
 
@@ -64,7 +66,7 @@ impl Client for LibZfsClient {
         source: Option<&Label>,
         _properties: &[String],
     ) -> Result<(), Error> {
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
 
         // Create properties nvlist with description if provided
@@ -81,7 +83,7 @@ impl Client for LibZfsClient {
                 // environment.
 
                 // Build the full snapshot path (which handles validation).
-                let snapshot_path = self.root.append(name)?.snapshot(snapshot)?;
+                let snapshot_path = self.get_root()?.append(name)?.snapshot(snapshot)?;
 
                 // Open the snapshot (which also verifies it exists).
                 Dataset::snapshot(&lzh, &snapshot_path).map_err(|err| {
@@ -99,7 +101,7 @@ impl Client for LibZfsClient {
             Some(Label::Name(name)) => {
                 // Case #2: beadm create -e EXISTING NAME, which creates the
                 // clone from a new snapshot of a source boot environment.
-                let snapshot_path = self.root.append(name)?.generate_snapshot()?;
+                let snapshot_path = self.get_root()?.append(name)?.generate_snapshot()?;
 
                 Dataset::create_snapshot(&lzh, &snapshot_path, props.as_ref()).map_err(|err| {
                     // Special casing for EZFS_NOENT.
@@ -160,7 +162,7 @@ impl Client for LibZfsClient {
             props.add_string(DESCRIPTION_PROP, desc)?;
         }
 
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         Dataset::create(&lzh, &be_path, &props).map_err(|err| {
             // Special casing for EZFS_EEXIST.
@@ -185,7 +187,7 @@ impl Client for LibZfsClient {
 
         let dataset = match target {
             Label::Name(name) => {
-                let path = self.root.append(name)?;
+                let path = self.get_root()?.append(name)?;
                 let dataset = Dataset::boot_environment(&lzh, name, &path)?;
 
                 // Cannot destroy the active, next, or boot once boot environment.
@@ -267,7 +269,7 @@ impl Client for LibZfsClient {
                 dataset
             }
             Label::Snapshot(name, snapshot) => {
-                let path = self.root.append(name)?.snapshot(snapshot)?;
+                let path = self.get_root()?.append(name)?.snapshot(snapshot)?;
                 let dataset = Dataset::snapshot(&lzh, &path)?;
 
                 // If this snapshot is the basis for any clones, we need to
@@ -304,7 +306,7 @@ impl Client for LibZfsClient {
         mountpoint: Option<&Path>,
         _mode: MountMode,
     ) -> Result<PathBuf, Error> {
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
 
@@ -335,7 +337,7 @@ impl Client for LibZfsClient {
     }
 
     fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error> {
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
 
@@ -355,7 +357,7 @@ impl Client for LibZfsClient {
     }
 
     fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
         if let Some(mountpoint) = dataset.get_mountpoint() {
@@ -366,8 +368,8 @@ impl Client for LibZfsClient {
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
-        let be_path = self.root.append(be_name)?;
-        let new_path = self.root.append(new_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
+        let new_path = self.get_root()?.append(new_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
         dataset
@@ -394,10 +396,10 @@ impl Client for LibZfsClient {
     }
 
     fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
-        let dataset = self.root.append(be_name)?;
+        let dataset = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         Dataset::boot_environment(&lzh, be_name, &dataset)?; // Check existence.
-        let zpool = Zpool::open(&lzh, &self.root.pool())?;
+        let zpool = Zpool::open(&lzh, &self.get_root()?.pool())?;
 
         if !temporary {
             // Unset any temporary activations *before* setting the new `bootfs`
@@ -420,16 +422,16 @@ impl Client for LibZfsClient {
 
     fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error> {
         let lzh = LibHandle::get();
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let be_dataset = Dataset::filesystem(&lzh, &be_path)?;
-        let snap_path = self.root.snapshot(snapshot)?;
+        let snap_path = self.get_root()?.snapshot(snapshot)?;
         let snap_dataset = Dataset::snapshot(&lzh, &snap_path)?;
         be_dataset.rollback_to(&lzh, &snap_dataset)
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
         let lzh = LibHandle::get();
-        let root_dataset = Dataset::filesystem(&lzh, &self.root)?;
+        let root_dataset = Dataset::filesystem(&lzh, self.get_root()?)?;
         let rootfs = get_rootfs()?;
         let bootfs = self.get_next_boot(&lzh)?;
         let previous_bootfs = self.get_previous_boot(&lzh)?;
@@ -471,7 +473,7 @@ impl Client for LibZfsClient {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
-        let be_path = self.root.append(be_name)?;
+        let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::filesystem(&lzh, &be_path)?;
         let mut snapshots = Vec::new();
@@ -493,8 +495,10 @@ impl Client for LibZfsClient {
     fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, Error> {
         let snapshot_path = match source {
             Some(label) => match label {
-                Label::Name(name) => self.root.append(name)?.generate_snapshot(),
-                Label::Snapshot(name, snapshot) => self.root.append(name)?.snapshot(snapshot),
+                Label::Name(name) => self.get_root()?.append(name)?.generate_snapshot(),
+                Label::Snapshot(name, snapshot) => {
+                    self.get_root()?.append(name)?.snapshot(snapshot)
+                }
             },
             None => {
                 // Snapshot the active boot environment with auto-generated name
@@ -529,7 +533,7 @@ impl Client for LibZfsClient {
 
     fn clear_boot_once(&self) -> Result<(), Error> {
         let lzh = LibHandle::get();
-        let zpool = Zpool::open(&lzh, &self.root.pool())?;
+        let zpool = Zpool::open(&lzh, &self.get_root()?.pool())?;
 
         // Get the previous bootfs value
         let previous_bootfs = match zpool.get_previous_bootfs() {
@@ -602,7 +606,7 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let dataset = match target {
             Label::Snapshot(name, snapshot) => {
-                let dataset_path = self.root.append(name)?.snapshot(snapshot)?;
+                let dataset_path = self.get_root()?.append(name)?.snapshot(snapshot)?;
                 Dataset::snapshot(&lzh, &dataset_path).map_err(|err| {
                     if let Error::LibzfsError(LibzfsError {
                         errno: ffi::EZFS_NOENT,
@@ -615,7 +619,7 @@ impl Client for LibZfsClient {
                 })?
             }
             Label::Name(name) => {
-                let dataset_path = self.root.append(name)?;
+                let dataset_path = self.get_root()?.append(name)?;
                 Dataset::boot_environment(&lzh, name, &dataset_path)?
             }
         };
@@ -1547,7 +1551,7 @@ fn get_rootfs() -> Result<Option<DatasetName>, Error> {
 
 // Gets the parent dataset of the active boot environment, provided it exists
 // and looks valid.
-fn get_active_boot_environment_root() -> Result<DatasetName, Error> {
+fn get_active_boot_environment_root() -> Result<Root, Error> {
     // We're looking for a ZFS filesystem layout that looks like the
     // following:
     //
@@ -1576,7 +1580,7 @@ fn get_active_boot_environment_root() -> Result<DatasetName, Error> {
         return Err(Error::invalid_root(&parent.to_string()));
     }
 
-    Ok(parent)
+    Ok(Root::from(parent))
 }
 
 #[cfg(test)]

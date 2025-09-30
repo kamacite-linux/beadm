@@ -260,6 +260,12 @@ pub struct Root {
 }
 
 impl Root {
+    pub(crate) fn from(dataset: zfs::DatasetName) -> Self {
+        Self {
+            path: dataset.to_string(),
+        }
+    }
+
     pub(crate) fn to_dataset(&self) -> zfs::DatasetName {
         // SAFETY: Safe to unwrap because we've already validated the name as a dataset.
         zfs::DatasetName::from_str(&self.path).unwrap()
