@@ -331,13 +331,13 @@ impl Client for ClientProxy {
 
 /// Individual boot environment D-Bus object
 #[derive(Clone)]
-pub struct BootEnvironmentObject {
+pub struct BootEnvironmentObject<T> {
     data: Arc<RwLock<BootEnvironment>>,
-    client: Arc<dyn Client>,
+    client: Arc<T>,
 }
 
-impl BootEnvironmentObject {
-    pub fn new(data: BootEnvironment, client: Arc<dyn Client>) -> Self {
+impl<T: Client + 'static> BootEnvironmentObject<T> {
+    pub fn new(data: BootEnvironment, client: Arc<T>) -> Self {
         Self {
             data: Arc::new(RwLock::new(data)),
             client,
@@ -419,7 +419,7 @@ impl BootEnvironmentObject {
 }
 
 #[interface(name = "ca.kamacite.BootEnvironment")]
-impl BootEnvironmentObject {
+impl<T: Client + 'static> BootEnvironmentObject<T> {
     /// The name of this boot environment.
     #[zbus(property)]
     fn name(&self) -> String {
@@ -671,13 +671,13 @@ impl BootEnvironmentObject {
 
 /// Main beadm manager implementing ObjectManager
 #[derive(Clone)]
-pub struct BootEnvironmentManager {
-    client: Arc<dyn Client>,
+pub struct BootEnvironmentManager<T> {
+    client: Arc<T>,
     guids: Arc<Mutex<HashSet<u64>>>,
 }
 
-impl BootEnvironmentManager {
-    pub fn new<T: Client + 'static>(client: T) -> Self {
+impl<T: Client> BootEnvironmentManager<T> {
+    pub fn new(client: T) -> Self {
         Self {
             client: Arc::new(client),
             guids: Arc::new(Mutex::new(HashSet::new())),
@@ -686,7 +686,7 @@ impl BootEnvironmentManager {
 }
 
 #[interface(name = "ca.kamacite.BootEnvironmentManager")]
-impl BootEnvironmentManager {
+impl<T: Client + 'static> BootEnvironmentManager<T> {
     /// Refresh managed objects.
     pub async fn refresh(
         &self,
@@ -706,7 +706,7 @@ impl BootEnvironmentManager {
             let path = be_object_path(*guid);
             if let Some(current) = envs.remove(guid) {
                 let iface = object_server
-                    .interface::<_, BootEnvironmentObject>(path)
+                    .interface::<_, BootEnvironmentObject<T>>(path)
                     .await?;
                 iface
                     .get()
@@ -722,7 +722,7 @@ impl BootEnvironmentManager {
         for guid in to_remove.into_iter() {
             let path = be_object_path(guid);
             object_server
-                .remove::<BootEnvironmentObject, _>(&path)
+                .remove::<BootEnvironmentObject<T>, _>(&path)
                 .await?;
             guids.remove(&guid);
             tracing::debug!(path = path.to_string(), "Removed boot environment object");
@@ -1134,7 +1134,7 @@ pub async fn serve<T: Client + 'static>(client: T, use_session_bus: bool) -> zbu
     // Populate the tree of boot environment objects.
     let iface_ref = connection
         .object_server()
-        .interface::<_, BootEnvironmentManager>(BOOT_ENV_PATH)
+        .interface::<_, BootEnvironmentManager<T>>(BOOT_ENV_PATH)
         .await?;
     let manager = iface_ref.get().await;
     manager.refresh(&connection.object_server()).await?;
