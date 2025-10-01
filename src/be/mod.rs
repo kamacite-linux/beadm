@@ -270,6 +270,10 @@ impl Root {
         // SAFETY: Safe to unwrap because we've already validated the name as a dataset.
         zfs::DatasetName::from_str(&self.path).unwrap()
     }
+
+    pub(crate) fn as_str(&self) -> &str {
+        self.path.as_str()
+    }
 }
 
 impl FromStr for Root {

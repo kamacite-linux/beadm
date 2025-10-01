@@ -8,25 +8,26 @@ use chrono::Utc;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::RwLock;
 
 use super::validation::{validate_be_name, validate_component};
 use super::{
-    BootEnvironment, Client, Error, Label, MountMode, Snapshot, generate_snapshot_name,
+    BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot, generate_snapshot_name,
     generate_temp_mountpoint,
 };
 
 /// A boot environment client populated with static data that operates
 /// entirely in-memory with no side effects.
 pub struct EmulatorClient {
-    root: String,
+    root: Root,
     bes: RwLock<Vec<BootEnvironment>>,
 }
 
 impl EmulatorClient {
     pub fn new(bes: Vec<BootEnvironment>) -> Self {
         Self {
-            root: "zfake/ROOT".to_string(),
+            root: Root::from_str("zfake/ROOT").unwrap(),
             bes: RwLock::new(bes),
         }
     }
@@ -41,7 +42,7 @@ impl EmulatorClient {
     #[cfg(test)]
     pub fn empty() -> Self {
         Self {
-            root: "zfake/ROOT".to_string(),
+            root: Root::from_str("zfake/ROOT").unwrap(),
             bes: RwLock::new(vec![]),
         }
     }
@@ -60,7 +61,7 @@ impl Client for EmulatorClient {
         _properties: &[String],
     ) -> Result<(), Error> {
         // Validate the boot environment name (like libzfs does via self.root.append())
-        validate_be_name(be_name, &self.root)?;
+        validate_be_name(be_name, self.root.as_str())?;
 
         let mut bes = self.bes.write().unwrap();
 
@@ -118,7 +119,7 @@ impl Client for EmulatorClient {
 
         bes.push(BootEnvironment {
             name: be_name.to_string(),
-            path: format!("{}/{}", self.root, be_name),
+            path: format!("{}/{}", self.root.as_str(), be_name),
             guid: Self::generate_guid(be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
@@ -148,7 +149,7 @@ impl Client for EmulatorClient {
         // Create new empty boot environment
         bes.push(BootEnvironment {
             name: be_name.to_string(),
-            path: format!("{}/{}", self.root, be_name),
+            path: format!("{}/{}", self.root.as_str(), be_name),
             guid: Self::generate_guid(be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
@@ -323,7 +324,7 @@ impl Client for EmulatorClient {
     }
 
     fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
-        validate_be_name(new_name, &self.root)?;
+        validate_be_name(new_name, self.root.as_str())?;
         let mut bes = self.bes.write().unwrap();
 
         // Check if source BE exists
@@ -345,7 +346,7 @@ impl Client for EmulatorClient {
 
         // Perform the rename
         bes[be_index].name = new_name.to_string();
-        bes[be_index].path = format!("{}/{}", self.root, new_name);
+        bes[be_index].path = format!("{}/{}", self.root.as_str(), new_name);
 
         Ok(())
     }
