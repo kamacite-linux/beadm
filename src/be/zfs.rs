@@ -51,6 +51,7 @@ impl Client for LibZfsClient {
         description: Option<&str>,
         source: Option<&Label>,
         _properties: &[String],
+        _root: Option<&Root>,
     ) -> Result<(), Error> {
         let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
@@ -142,6 +143,7 @@ impl Client for LibZfsClient {
         description: Option<&str>,
         _host_id: Option<&str>,
         _properties: &[String],
+        _root: Option<&Root>,
     ) -> Result<(), Error> {
         let mut props = NvList::from(&[("canmount", "noauto"), ("mountpoint", "/")])?;
         if let Some(desc) = description {
@@ -168,6 +170,7 @@ impl Client for LibZfsClient {
         target: &Label,
         force_unmount: bool,
         destroy_snapshots: bool,
+        _root: Option<&Root>,
     ) -> Result<(), Error> {
         let lzh = LibHandle::get();
 
@@ -292,6 +295,7 @@ impl Client for LibZfsClient {
         be_name: &str,
         mountpoint: Option<&Path>,
         _mode: MountMode,
+        _root: Option<&Root>,
     ) -> Result<PathBuf, Error> {
         let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
@@ -323,7 +327,12 @@ impl Client for LibZfsClient {
         Ok(mountpoint)
     }
 
-    fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error> {
+    fn unmount(
+        &self,
+        be_name: &str,
+        force: bool,
+        _root: Option<&Root>,
+    ) -> Result<Option<PathBuf>, Error> {
         let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
@@ -343,7 +352,7 @@ impl Client for LibZfsClient {
         }
     }
 
-    fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
+    fn hostid(&self, be_name: &str, _root: Option<&Root>) -> Result<Option<u32>, Error> {
         let be_path = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
@@ -354,7 +363,7 @@ impl Client for LibZfsClient {
         }
     }
 
-    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
+    fn rename(&self, be_name: &str, new_name: &str, _root: Option<&Root>) -> Result<(), Error> {
         let be_path = self.get_root()?.append(be_name)?;
         let new_path = self.get_root()?.append(new_name)?;
         let lzh = LibHandle::get();
@@ -382,7 +391,7 @@ impl Client for LibZfsClient {
             })
     }
 
-    fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
+    fn activate(&self, be_name: &str, temporary: bool, _root: Option<&Root>) -> Result<(), Error> {
         let dataset = self.get_root()?.append(be_name)?;
         let lzh = LibHandle::get();
         Dataset::boot_environment(&lzh, be_name, &dataset)?; // Check existence.
@@ -407,7 +416,7 @@ impl Client for LibZfsClient {
         zpool.set_bootfs(&lzh, &dataset)
     }
 
-    fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error> {
+    fn rollback(&self, be_name: &str, snapshot: &str, _root: Option<&Root>) -> Result<(), Error> {
         let lzh = LibHandle::get();
         let be_path = self.get_root()?.append(be_name)?;
         let be_dataset = Dataset::filesystem(&lzh, &be_path)?;
@@ -416,7 +425,7 @@ impl Client for LibZfsClient {
         be_dataset.rollback_to(&lzh, &snap_dataset)
     }
 
-    fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
+    fn get_boot_environments(&self, _root: Option<&Root>) -> Result<Vec<BootEnvironment>, Error> {
         let root = self.get_root()?;
         let lzh = LibHandle::get();
         let root_dataset = Dataset::filesystem(&lzh, root)?;
@@ -461,7 +470,7 @@ impl Client for LibZfsClient {
         Ok(bes)
     }
 
-    fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
+    fn get_snapshots(&self, be_name: &str, _root: Option<&Root>) -> Result<Vec<Snapshot>, Error> {
         let root = self.get_root()?;
         let be_path = root.append(be_name)?;
         let lzh = LibHandle::get();
@@ -482,7 +491,12 @@ impl Client for LibZfsClient {
         Ok(snapshots)
     }
 
-    fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, Error> {
+    fn snapshot(
+        &self,
+        source: Option<&Label>,
+        description: Option<&str>,
+        _root: Option<&Root>,
+    ) -> Result<String, Error> {
         let snapshot_path = match source {
             Some(label) => match label {
                 Label::Name(name) => self.get_root()?.append(name)?.generate_snapshot(),
@@ -521,7 +535,7 @@ impl Client for LibZfsClient {
         Ok(snapshot_path.basename())
     }
 
-    fn clear_boot_once(&self) -> Result<(), Error> {
+    fn clear_boot_once(&self, _root: Option<&Root>) -> Result<(), Error> {
         let lzh = LibHandle::get();
         let zpool = Zpool::open(&lzh, &self.get_root()?.pool())?;
 
@@ -592,7 +606,12 @@ impl Client for LibZfsClient {
         Ok(())
     }
 
-    fn describe(&self, target: &Label, description: &str) -> Result<(), Error> {
+    fn describe(
+        &self,
+        target: &Label,
+        description: &str,
+        _root: Option<&Root>,
+    ) -> Result<(), Error> {
         let lzh = LibHandle::get();
         let dataset = match target {
             Label::Snapshot(name, snapshot) => {

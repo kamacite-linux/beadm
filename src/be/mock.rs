@@ -59,6 +59,7 @@ impl Client for EmulatorClient {
         description: Option<&str>,
         source: Option<&Label>,
         _properties: &[String],
+        _root: Option<&Root>,
     ) -> Result<(), Error> {
         // Validate the boot environment name (like libzfs does via self.root.append())
         validate_be_name(be_name, self.root.as_str())?;
@@ -138,6 +139,7 @@ impl Client for EmulatorClient {
         description: Option<&str>,
         _host_id: Option<&str>,
         _properties: &[String],
+        _root: Option<&Root>,
     ) -> Result<(), Error> {
         let mut bes = self.bes.write().unwrap();
 
@@ -162,7 +164,13 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn destroy(&self, target: &Label, force_unmount: bool, snapshots: bool) -> Result<(), Error> {
+    fn destroy(
+        &self,
+        target: &Label,
+        force_unmount: bool,
+        snapshots: bool,
+        _root: Option<&Root>,
+    ) -> Result<(), Error> {
         match target {
             Label::Name(be_name) => {
                 // Destroy a boot environment
@@ -220,6 +228,7 @@ impl Client for EmulatorClient {
         be_name: &str,
         mountpoint: Option<&Path>,
         _mode: MountMode,
+        _root: Option<&Root>,
     ) -> Result<PathBuf, Error> {
         let mut bes = self.bes.write().unwrap();
 
@@ -268,7 +277,12 @@ impl Client for EmulatorClient {
         Ok(mountpoint)
     }
 
-    fn unmount(&self, target: &str, _force: bool) -> Result<Option<PathBuf>, Error> {
+    fn unmount(
+        &self,
+        target: &str,
+        _force: bool,
+        _root: Option<&Root>,
+    ) -> Result<Option<PathBuf>, Error> {
         let mut bes = self.bes.write().unwrap();
 
         // Target can be either a BE name or a mountpoint path
@@ -293,7 +307,7 @@ impl Client for EmulatorClient {
         Ok(mountpoint)
     }
 
-    fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error> {
+    fn hostid(&self, be_name: &str, _root: Option<&Root>) -> Result<Option<u32>, Error> {
         let bes = self.bes.read().unwrap();
 
         // Find the boot environment
@@ -323,7 +337,7 @@ impl Client for EmulatorClient {
         }
     }
 
-    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error> {
+    fn rename(&self, be_name: &str, new_name: &str, _root: Option<&Root>) -> Result<(), Error> {
         validate_be_name(new_name, self.root.as_str())?;
         let mut bes = self.bes.write().unwrap();
 
@@ -351,7 +365,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error> {
+    fn activate(&self, be_name: &str, temporary: bool, _root: Option<&Root>) -> Result<(), Error> {
         let mut bes = self.bes.write().unwrap();
 
         // Find the target boot environment
@@ -386,7 +400,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn clear_boot_once(&self) -> Result<(), Error> {
+    fn clear_boot_once(&self, _root: Option<&Root>) -> Result<(), Error> {
         let mut bes = self.bes.write().unwrap();
 
         let temporary_be_index = bes.iter().position(|be| be.boot_once);
@@ -408,7 +422,7 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn rollback(&self, be_name: &str, _snapshot: &str) -> Result<(), Error> {
+    fn rollback(&self, be_name: &str, _snapshot: &str, _root: Option<&Root>) -> Result<(), Error> {
         if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
@@ -417,11 +431,11 @@ impl Client for EmulatorClient {
         unimplemented!("Mocking does not yet track snapshots");
     }
 
-    fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
+    fn get_boot_environments(&self, _root: Option<&Root>) -> Result<Vec<BootEnvironment>, Error> {
         Ok(self.bes.read().unwrap().clone())
     }
 
-    fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
+    fn get_snapshots(&self, be_name: &str, _root: Option<&Root>) -> Result<Vec<Snapshot>, Error> {
         if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
@@ -434,6 +448,7 @@ impl Client for EmulatorClient {
         &self,
         source: Option<&Label>,
         _description: Option<&str>,
+        _root: Option<&Root>,
     ) -> Result<String, Error> {
         let (name, snapshot) = match source {
             Some(label) => match label {
@@ -474,7 +489,12 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn describe(&self, target: &Label, description: &str) -> Result<(), Error> {
+    fn describe(
+        &self,
+        target: &Label,
+        description: &str,
+        _root: Option<&Root>,
+    ) -> Result<(), Error> {
         match target {
             Label::Snapshot(name, _snapshot) => {
                 // For mock implementation, we can't actually modify snapshots
@@ -565,10 +585,10 @@ mod tests {
     fn test_emulated_new() {
         let client = EmulatorClient::sampled();
         client
-            .create_empty("test-empty", Some("Empty BE"), None, &[])
+            .create_empty("test-empty", Some("Empty BE"), None, &[], None)
             .unwrap();
 
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let test_be = bes.iter().find(|be| be.name == "test-empty").unwrap();
         assert_eq!(test_be.description, Some("Empty BE".to_string()));
         assert_eq!(test_be.space, 8192);
@@ -577,7 +597,7 @@ mod tests {
     #[test]
     fn test_emulated_new_conflict() {
         let client = EmulatorClient::sampled();
-        let result = client.create_empty("default", Some("Empty BE"), None, &[]);
+        let result = client.create_empty("default", Some("Empty BE"), None, &[], None);
         assert!(matches!(result, Err(Error::Conflict { .. })));
     }
 
@@ -586,10 +606,10 @@ mod tests {
         let client = EmulatorClient::sampled();
         // Host ID is accepted but ignored in the mock implementation
         client
-            .create_empty("test-hostid", None, Some("test-host"), &[])
+            .create_empty("test-hostid", None, Some("test-host"), &[], None)
             .unwrap();
 
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let test_be = bes.iter().find(|be| be.name == "test-hostid").unwrap();
         assert_eq!(test_be.description, None);
     }
@@ -599,21 +619,21 @@ mod tests {
         let client = EmulatorClient::empty();
 
         // Test creating a new boot environment
-        let result = client.create("test-be", Some("Test description"), None, &[]);
+        let result = client.create("test-be", Some("Test description"), None, &[], None);
         assert!(result.is_ok());
 
         // Verify it was added
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].name, "test-be");
         assert_eq!(bes[0].description, Some("Test description".to_string()));
 
         // Test creating a duplicate should fail
-        let result = client.create("test-be", None, None, &[]);
+        let result = client.create("test-be", None, None, &[], None);
         assert!(matches!(result, Err(Error::Conflict { name }) if name == "test-be"));
 
         // Verify we still have only one
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 1);
     }
 
@@ -636,23 +656,23 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Verify it exists
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].name, "destroyable");
 
         // Destroy it
-        let result = client.destroy(&Label::Name("destroyable".to_string()), false, false);
+        let result = client.destroy(&Label::Name("destroyable".to_string()), false, false, None);
         assert!(result.is_ok());
 
         // Verify it's gone
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 0);
     }
 
     #[test]
     fn test_emulated_destroy_not_found() {
         let client = EmulatorClient::empty();
-        let result = client.destroy(&Label::Name("nonexistent".to_string()), false, false);
+        let result = client.destroy(&Label::Name("nonexistent".to_string()), false, false, None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -675,11 +695,11 @@ mod tests {
         let client = EmulatorClient::new(vec![active_be]);
 
         // Try to destroy the active boot environment - should fail
-        let result = client.destroy(&Label::Name("active-be".to_string()), false, false);
+        let result = client.destroy(&Label::Name("active-be".to_string()), false, false, None);
         assert!(matches!(result, Err(Error::CannotDestroyActive { name }) if name == "active-be"));
 
         // Verify it still exists
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].name, "active-be");
     }
@@ -703,21 +723,21 @@ mod tests {
         let client = EmulatorClient::new(vec![mounted_be]);
 
         // Try to destroy without force_unmount - should fail
-        let result = client.destroy(&Label::Name("mounted-be".to_string()), false, false);
+        let result = client.destroy(&Label::Name("mounted-be".to_string()), false, false, None);
         assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "mounted-be" && mountpoint == "/mnt/test"));
 
         // Verify it still exists
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].name, "mounted-be");
 
         // Try to destroy with force_unmount - should succeed
-        let result = client.destroy(&Label::Name("mounted-be".to_string()), true, false);
+        let result = client.destroy(&Label::Name("mounted-be".to_string()), true, false, None);
         assert!(result.is_ok());
 
         // Verify it's gone
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 0);
     }
 
@@ -726,29 +746,29 @@ mod tests {
         let client = EmulatorClient::new(vec![]);
 
         // Start with empty
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 0);
 
         // Create a boot environment
-        let result = client.create("temp-be", Some("Temporary BE"), None, &[]);
+        let result = client.create("temp-be", Some("Temporary BE"), None, &[], None);
         assert!(result.is_ok());
 
         // Verify it exists
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 1);
         assert_eq!(bes[0].name, "temp-be");
         assert_eq!(bes[0].description, Some("Temporary BE".to_string()));
 
         // Destroy it
-        let result = client.destroy(&Label::Name("temp-be".to_string()), false, false);
+        let result = client.destroy(&Label::Name("temp-be".to_string()), false, false, None);
         assert!(result.is_ok());
 
         // Verify it's gone
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 0);
 
         // Try to destroy it again - should fail
-        let result = client.destroy(&Label::Name("temp-be".to_string()), false, false);
+        let result = client.destroy(&Label::Name("temp-be".to_string()), false, false, None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "temp-be"));
     }
 
@@ -771,11 +791,11 @@ mod tests {
 
         // Mount the BE
         let path = PathBuf::from("/mnt/test");
-        let result = client.mount("test-be", Some(path.as_path()), MountMode::ReadWrite);
+        let result = client.mount("test-be", Some(path.as_path()), MountMode::ReadWrite, None);
         assert!(result.is_ok());
 
         // Verify it's mounted
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(
             bes[0].mountpoint,
             Some(std::path::PathBuf::from("/mnt/test"))
@@ -785,7 +805,7 @@ mod tests {
     #[test]
     fn test_emulated_mount_not_found() {
         let client = EmulatorClient::new(vec![]);
-        let result = client.mount("nonexistent", None, MountMode::ReadWrite);
+        let result = client.mount("nonexistent", None, MountMode::ReadWrite, None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -805,7 +825,7 @@ mod tests {
         };
         let client = EmulatorClient::new(vec![test_be]);
         let path = PathBuf::from("/mnt/test");
-        let result = client.mount("test-be", Some(path.as_path()), MountMode::ReadWrite);
+        let result = client.mount("test-be", Some(path.as_path()), MountMode::ReadWrite, None);
         assert!(matches!(result, Err(Error::Mounted { name, mountpoint })
             if name == "test-be" && mountpoint == "/mnt/existing"));
     }
@@ -840,7 +860,7 @@ mod tests {
 
         let client = EmulatorClient::new(vec![be1, be2]);
         let path = PathBuf::from("/mnt/test");
-        let result = client.mount("be2", Some(path.as_path()), MountMode::ReadWrite);
+        let result = client.mount("be2", Some(path.as_path()), MountMode::ReadWrite, None);
         assert!(matches!(result, Err(Error::MountPointInUse { path }) if path == "/mnt/test"));
     }
 
@@ -862,11 +882,11 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Unmount by BE name
-        let result = client.unmount("test-be", false);
+        let result = client.unmount("test-be", false, None);
         assert!(result.is_ok());
 
         // Verify it's unmounted
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes[0].mountpoint, None);
     }
 
@@ -888,11 +908,11 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Unmount by path
-        let result = client.unmount("/mnt/test", false);
+        let result = client.unmount("/mnt/test", false, None);
         assert!(result.is_ok());
 
         // Verify it's unmounted
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes[0].mountpoint, None);
     }
 
@@ -913,7 +933,7 @@ mod tests {
 
         let client = EmulatorClient::new(vec![test_be]);
 
-        let result = client.unmount("test-be", false);
+        let result = client.unmount("test-be", false, None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None);
     }
@@ -936,12 +956,12 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Test hostid for existing mounted BE
-        let result = client.hostid("test-be");
+        let result = client.hostid("test-be", None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some(0xdeadbeef));
 
         // Test hostid for non-existent BE
-        let result = client.hostid("non-existent");
+        let result = client.hostid("non-existent", None);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::NotFound { name } if name == "non-existent"));
     }
@@ -964,7 +984,7 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Test BE with no hostid (mounted)
-        let result = client.hostid("no-hostid-be");
+        let result = client.hostid("no-hostid-be", None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None);
     }
@@ -987,7 +1007,7 @@ mod tests {
         let client = EmulatorClient::new(vec![test_be]);
 
         // Test hostid for unmounted BE - should return error
-        let result = client.hostid("unmounted-be");
+        let result = client.hostid("unmounted-be", None);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), Error::NotMounted { name } if name == "unmounted-be")
@@ -1011,11 +1031,11 @@ mod tests {
 
         let client = EmulatorClient::new(vec![test_be]);
 
-        let result = client.rename("old-name", "new-name");
+        let result = client.rename("old-name", "new-name", None);
         assert!(result.is_ok());
 
         // Verify the rename
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes[0].name, "new-name");
         assert_eq!(bes[0].description, Some("Test BE".to_string()));
     }
@@ -1023,7 +1043,7 @@ mod tests {
     #[test]
     fn test_emulated_rename_not_found() {
         let client = EmulatorClient::empty();
-        let result = client.rename("nonexistent", "new-name");
+        let result = client.rename("nonexistent", "new-name", None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -1057,7 +1077,7 @@ mod tests {
 
         let client = EmulatorClient::new(vec![be1, be2]);
 
-        let result = client.rename("be1", "be2");
+        let result = client.rename("be1", "be2", None);
         assert!(matches!(result, Err(Error::Conflict { name }) if name == "be2"));
     }
 
@@ -1092,11 +1112,11 @@ mod tests {
         let client = EmulatorClient::new(vec![be1, be2]);
 
         // Activate be2 permanently
-        let result = client.activate("be2", false);
+        let result = client.activate("be2", false, None);
         assert!(result.is_ok());
 
         // Verify activation
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].next_boot); // be1 should no longer be next_boot
         assert!(bes[1].next_boot); // be2 should be next_boot
     }
@@ -1132,11 +1152,11 @@ mod tests {
         let client = EmulatorClient::new(vec![be1, be2]);
 
         // Activate be2 temporarily
-        let result = client.activate("be2", true);
+        let result = client.activate("be2", true, None);
         assert!(result.is_ok());
 
         // Verify temporary activation
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].boot_once); // be1 should not have boot_once
         assert!(bes[1].boot_once); // be2 should have boot_once (temporary activation)
     }
@@ -1173,24 +1193,24 @@ mod tests {
         let client = EmulatorClient::new(vec![be1, be2]);
 
         // Activate be2 permanently - should clear be1's next_boot
-        client.activate("be2", false).unwrap();
-        let bes = client.get_boot_environments().unwrap();
+        client.activate("be2", false, None).unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].next_boot); // be1 should no longer be next_boot
         assert!(bes[1].next_boot); // be2 should now be next_boot
         assert!(!bes[0].boot_once); // no boot_once flags
         assert!(!bes[1].boot_once);
 
         // Activate be1 temporarily - should clear be2's next_boot and set be1's boot_once
-        client.activate("be1", true).unwrap();
-        let bes = client.get_boot_environments().unwrap();
+        client.activate("be1", true, None).unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].next_boot); // no next_boot flags when using temporary
         assert!(!bes[1].next_boot);
         assert!(bes[0].boot_once); // be1 should have boot_once
         assert!(!bes[1].boot_once); // be2 should not have boot_once
 
         // Activate be2 temporarily - should clear be1's boot_once and set be2's boot_once
-        client.activate("be2", true).unwrap();
-        let bes = client.get_boot_environments().unwrap();
+        client.activate("be2", true, None).unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].next_boot); // still no next_boot flags
         assert!(!bes[1].next_boot);
         assert!(!bes[0].boot_once); // be1 should no longer have boot_once
@@ -1200,19 +1220,27 @@ mod tests {
     #[test]
     fn test_emulated_activate_not_found() {
         let client = EmulatorClient::new(vec![]);
-        let result = client.activate("nonexistent", false);
+        let result = client.activate("nonexistent", false, None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
     #[test]
     fn test_emulated_create_or_rename_invalid_name() {
         let client = EmulatorClient::sampled();
-        assert!(client.create("-invalid", None, None, &[]).is_err());
-        assert!(client.create("invalid name", None, None, &[]).is_err());
-        assert!(client.create("invalid@name", None, None, &[]).is_err());
-        assert!(client.rename("default", "-invalid").is_err());
-        assert!(client.rename("default", "invalid name").is_err());
-        assert!(client.rename("default", "invalid@name").is_err());
+        assert!(client.create("-invalid", None, None, &[], None).is_err());
+        assert!(
+            client
+                .create("invalid name", None, None, &[], None)
+                .is_err()
+        );
+        assert!(
+            client
+                .create("invalid@name", None, None, &[], None)
+                .is_err()
+        );
+        assert!(client.rename("default", "-invalid", None).is_err());
+        assert!(client.rename("default", "invalid name", None).is_err());
+        assert!(client.rename("default", "invalid@name", None).is_err());
     }
 
     #[test]
@@ -1220,47 +1248,47 @@ mod tests {
         let client = EmulatorClient::new(vec![]);
 
         // Create a boot environment
-        let result = client.create("test-be", Some("Integration test"), None, &[]);
+        let result = client.create("test-be", Some("Integration test"), None, &[], None);
         assert!(result.is_ok());
 
         // Mount it
-        let result = client.mount("test-be", None, MountMode::ReadWrite);
+        let result = client.mount("test-be", None, MountMode::ReadWrite, None);
         assert!(result.is_ok());
 
         // Verify it's mounted
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(bes[0].mountpoint.is_some());
 
         // Unmount it
-        let result = client.unmount("test-be", false);
+        let result = client.unmount("test-be", false, None);
         assert!(result.is_ok());
 
         // Verify it's unmounted
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes[0].mountpoint, None);
 
         // Rename it
-        let result = client.rename("test-be", "renamed-be");
+        let result = client.rename("test-be", "renamed-be", None);
         assert!(result.is_ok());
 
         // Verify the rename
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes[0].name, "renamed-be");
 
         // Activate it temporarily
-        let result = client.activate("renamed-be", true);
+        let result = client.activate("renamed-be", true, None);
         assert!(result.is_ok());
 
         // Verify activation
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(bes[0].boot_once); // Should have boot_once for temporary activation
 
         // Destroy it (should work since it's not active)
-        let result = client.destroy(&Label::Name("renamed-be".to_string()), false, false);
+        let result = client.destroy(&Label::Name("renamed-be".to_string()), false, false, None);
         assert!(result.is_ok());
 
         // Verify it's gone
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 0);
     }
 
@@ -1269,7 +1297,7 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Get snapshots for default BE
-        let snapshots = client.get_snapshots("default").unwrap();
+        let snapshots = client.get_snapshots("default", None).unwrap();
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].name, "default@2021-06-10-04:30");
         assert_eq!(snapshots[0].space, 404_000);
@@ -1279,7 +1307,7 @@ mod tests {
         assert_eq!(snapshots[1].created, 1623305400);
 
         // Get snapshots for alt BE
-        let snapshots = client.get_snapshots("alt").unwrap();
+        let snapshots = client.get_snapshots("alt", None).unwrap();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].name, "alt@backup");
         assert_eq!(snapshots[0].space, 1024);
@@ -1289,7 +1317,7 @@ mod tests {
     #[test]
     fn test_emulated_snapshots_not_found() {
         let client = EmulatorClient::sampled();
-        let result = client.get_snapshots("nonexistent");
+        let result = client.get_snapshots("nonexistent", None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -1310,7 +1338,7 @@ mod tests {
         };
 
         let client = EmulatorClient::new(vec![test_be]);
-        let snapshots = client.get_snapshots("no-snapshots").unwrap();
+        let snapshots = client.get_snapshots("no-snapshots", None).unwrap();
         assert_eq!(snapshots.len(), 0);
     }
 
@@ -1324,11 +1352,12 @@ mod tests {
             Some("Cloned from default"),
             Some(&Label::from_str("default").unwrap()),
             &[],
+            None,
         );
         assert!(result.is_ok());
 
         // Verify it was created with inherited space from the source
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let new_be = bes.iter().find(|be| be.name == "from-default").unwrap();
         assert_eq!(new_be.description, Some("Cloned from default".to_string()));
         // Should inherit space from default (950_000_000)
@@ -1345,11 +1374,12 @@ mod tests {
             Some("From snapshot"),
             Some(&Label::from_str("default@2021-06-10-04:30").unwrap()),
             &[],
+            None,
         );
         assert!(result.is_ok());
 
         // Verify it was created with inherited space from the source BE
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let new_be = bes.iter().find(|be| be.name == "from-snapshot").unwrap();
         assert_eq!(new_be.description, Some("From snapshot".to_string()));
         // Should inherit space from default (950_000_000)
@@ -1361,11 +1391,11 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Create a new BE from the active one (no source specified)
-        let result = client.create("from-active", Some("Cloned from active"), None, &[]);
+        let result = client.create("from-active", Some("Cloned from active"), None, &[], None);
         assert!(result.is_ok());
 
         // Verify it was created with inherited space from the active BE
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let new_be = bes.iter().find(|be| be.name == "from-active").unwrap();
         assert_eq!(new_be.description, Some("Cloned from active".to_string()));
         // Should inherit space from default (active BE, 950_000_000)
@@ -1382,6 +1412,7 @@ mod tests {
             None,
             Some(&Label::from_str("nonexistent").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
 
@@ -1391,6 +1422,7 @@ mod tests {
             None,
             Some(&Label::from_str("nonexistent@snap").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::NotFound { .. })));
     }
@@ -1414,6 +1446,7 @@ mod tests {
             None,
             Some(&Label::from_str("zroot/ROOT/default").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
@@ -1423,6 +1456,7 @@ mod tests {
             None,
             Some(&Label::from_str("-invalid").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
@@ -1432,6 +1466,7 @@ mod tests {
             None,
             Some(&Label::from_str("zroot/ROOT/default@snap").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
@@ -1441,6 +1476,7 @@ mod tests {
             None,
             Some(&Label::from_str("default@invalid#name").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
@@ -1450,6 +1486,7 @@ mod tests {
             None,
             Some(&Label::from_str("invalid name@snap").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
 
@@ -1459,6 +1496,7 @@ mod tests {
             None,
             Some(&Label::from_str("default@invalid snap").unwrap()),
             &[],
+            None,
         );
         assert!(matches!(result, Err(Error::InvalidName { .. })));
     }
@@ -1494,20 +1532,20 @@ mod tests {
         let client = EmulatorClient::new(vec![be1, be2]);
 
         // First, activate be2 temporarily
-        client.activate("be2", true).unwrap();
+        client.activate("be2", true, None).unwrap();
 
         // Verify be2 is temporarily activated
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].boot_once); // be1 should not have boot_once
         assert!(!bes[0].next_boot); // be1 should not have next_boot (cleared by temporary activation)
         assert!(bes[1].boot_once); // be2 should have boot_once
 
         // Now clear the temporary activation
-        let result = client.clear_boot_once();
+        let result = client.clear_boot_once(None);
         assert!(result.is_ok());
 
         // Verify the state is restored
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].boot_once); // be1 should not have boot_once
         assert!(bes[0].next_boot); // be1 should be restored as next_boot (it was active)
         assert!(!bes[1].boot_once); // be2 should no longer have boot_once
@@ -1520,11 +1558,11 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Verify no temporary activation is set
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes.iter().any(|be| be.boot_once));
 
         // Try to clear nextboot when no temporary activation exists
-        let result = client.clear_boot_once();
+        let result = client.clear_boot_once(None);
         assert!(result.is_ok());
     }
 
@@ -1547,11 +1585,11 @@ mod tests {
         let client = EmulatorClient::new(vec![be1]);
 
         // Clear nextboot should work even when there's no active BE
-        let result = client.clear_boot_once();
+        let result = client.clear_boot_once(None);
         assert!(result.is_ok());
 
         // Verify temporary activation was cleared
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(!bes[0].boot_once); // boot_once should be cleared
         assert!(!bes[0].next_boot); // next_boot should remain false (no active BE to restore)
     }
@@ -1588,7 +1626,7 @@ mod tests {
         let client = EmulatorClient::new(vec![active_be, temp_be]);
 
         // Verify initial state
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         assert!(
             bes.iter()
                 .any(|be| be.name == "current" && be.active && be.next_boot)
@@ -1596,10 +1634,10 @@ mod tests {
         assert!(bes.iter().any(|be| be.name == "temporary" && !be.boot_once));
 
         // Activate temporary BE temporarily
-        client.activate("temporary", true).unwrap();
+        client.activate("temporary", true, None).unwrap();
 
         // Verify temporary activation
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let current = bes.iter().find(|be| be.name == "current").unwrap();
         let temporary = bes.iter().find(|be| be.name == "temporary").unwrap();
 
@@ -1611,11 +1649,11 @@ mod tests {
         assert!(temporary.boot_once); // Temporarily activated
 
         // Clear the temporary activation
-        let result = client.clear_boot_once();
+        let result = client.clear_boot_once(None);
         assert!(result.is_ok());
 
         // Verify the state is restored
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let current = bes.iter().find(|be| be.name == "current").unwrap();
         let temporary = bes.iter().find(|be| be.name == "temporary").unwrap();
 
@@ -1632,26 +1670,26 @@ mod tests {
         let client = EmulatorClient::sampled();
 
         // Get initial state
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
         assert_eq!(alt_be.description, Some("Testing".to_string()));
 
         // Change the description
         let target = Label::from_str("alt").unwrap();
-        let result = client.describe(&target, "Updated description");
+        let result = client.describe(&target, "Updated description", None);
         assert!(result.is_ok());
 
         // Verify the description was changed
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
         assert_eq!(alt_be.description, Some("Updated description".to_string()));
 
         // Test setting description on boot environment without description
         let target = Label::from_str("default").unwrap();
-        let result = client.describe(&target, "New description for default");
+        let result = client.describe(&target, "New description for default", None);
         assert!(result.is_ok());
 
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let default_be = bes.iter().find(|be| be.name == "default").unwrap();
         assert_eq!(
             default_be.description,
@@ -1665,7 +1703,7 @@ mod tests {
 
         // Try to describe a non-existent boot environment
         let target = Label::from_str("nonexistent").unwrap();
-        let result = client.describe(&target, "Some description");
+        let result = client.describe(&target, "Some description", None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
     }
 
@@ -1675,12 +1713,12 @@ mod tests {
 
         // Test describing a snapshot - should succeed (mock implementation validates format)
         let target = Label::from_str("default@2021-06-10-04:30").unwrap();
-        let result = client.describe(&target, "Updated snapshot description");
+        let result = client.describe(&target, "Updated snapshot description", None);
         assert!(result.is_ok());
 
         // Test describing a snapshot with non-existent BE
         let target = Label::from_str("nonexistent@snapshot").unwrap();
-        let result = client.describe(&target, "Description");
+        let result = client.describe(&target, "Description", None);
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "nonexistent"));
 
         // Note: Invalid snapshot formats like "default@snap@extra" are now handled
@@ -1693,10 +1731,10 @@ mod tests {
 
         // Test setting empty description
         let target = Label::from_str("alt").unwrap();
-        let result = client.describe(&target, "");
+        let result = client.describe(&target, "", None);
         assert!(result.is_ok());
 
-        let bes = client.get_boot_environments().unwrap();
+        let bes = client.get_boot_environments(None).unwrap();
         let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
         assert_eq!(alt_be.description, Some("".to_string()));
     }

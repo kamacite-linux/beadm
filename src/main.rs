@@ -30,8 +30,13 @@ struct Cli {
     /// The boot environment root is a dataset whose children are all boot
     /// environments. Defaults to the parent dataset of the active boot
     /// environment.
-    #[arg(short = 'r', global = true, help_heading = "Global options")]
-    beroot: Option<Root>,
+    #[arg(
+        name = "beroot", // Match bectl's "beroot" naming convention.
+        short = 'r',
+        global = true,
+        help_heading = "Global options"
+    )]
+    root: Option<Root>,
 
     /// Verbose output
     #[arg(short = 'v', global = true, help_heading = "Global options")]
@@ -380,11 +385,12 @@ struct PrintOptions<'a> {
 
 /// Prints a list of boot environments in the traditional `beadm list` format.
 fn print_boot_environments<T: Client>(
-    root: &T,
+    client: &T,
+    root: Option<&Root>,
     mut writer: impl std::io::Write,
     options: PrintOptions,
 ) -> Result<(), Error> {
-    let mut bes = root.get_boot_environments()?;
+    let mut bes = client.get_boot_environments(root)?;
 
     // Allow narrowing the output to a single boot environment (if it exists).
     if let Some(filter_name) = options.be_name {
@@ -415,7 +421,7 @@ fn print_boot_environments<T: Client>(
 
         // Group snapshots under their respective boot environment.
         if options.snapshots {
-            let mut snapshots = root.get_snapshots(&name)?;
+            let mut snapshots = client.get_snapshots(&name, root)?;
             // Sort snapshots by the same field as boot environments
             match options.sort_field {
                 SortField::Date => {
@@ -525,7 +531,11 @@ fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String> {
     )
 }
 
-fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result<()> {
+fn execute_command<T: Client + 'static>(
+    command: &Commands,
+    root: Option<&Root>,
+    client: T,
+) -> Result<()> {
     match command {
         Commands::Create {
             be_name,
@@ -554,6 +564,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                         final_description.as_deref(),
                         host_id.as_deref(),
                         property,
+                        root,
                     )
                     .context("Failed to create empty boot environment")?;
                 println!("Created empty boot environment '{}'.", be_name);
@@ -561,11 +572,17 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             }
 
             client
-                .create(be_name, description.as_deref(), source.as_ref(), property)
+                .create(
+                    be_name,
+                    description.as_deref(),
+                    source.as_ref(),
+                    property,
+                    root,
+                )
                 .context("Failed to create boot environment")?;
             if *activate || *temp_activate {
                 client
-                    .activate(be_name, *temp_activate)
+                    .activate(be_name, *temp_activate, root)
                     .context("Failed to activate newly-created boot environment")?;
             }
             println!(
@@ -587,7 +604,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             destroy_snapshots,
         } => {
             client
-                .destroy(target, *force_unmount, *destroy_snapshots)
+                .destroy(target, *force_unmount, *destroy_snapshots, root)
                 .context("Failed to destroy boot environment")?;
             println!("Destroyed '{}'.", target);
             Ok(())
@@ -614,7 +631,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
                 snapshots: *snapshots,
             };
 
-            print_boot_environments(&client, &mut std::io::stdout(), options)
+            print_boot_environments(&client, root, &mut std::io::stdout(), options)
                 .context("Failed to list boot environments")?;
             Ok(())
         }
@@ -624,7 +641,12 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             mode,
         } => {
             let mp = client
-                .mount(be_name, mountpoint.as_ref().map(|mp| mp.as_path()), *mode)
+                .mount(
+                    be_name,
+                    mountpoint.as_ref().map(|mp| mp.as_path()),
+                    *mode,
+                    root,
+                )
                 .context("Failed to mount boot environment")?;
             if is_temp_mountpoint(&mp) {
                 println!("{}", mp.display());
@@ -633,13 +655,13 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         }
         Commands::Unmount { be_name, force } => {
             client
-                .unmount(be_name, *force)
+                .unmount(be_name, *force, root)
                 .context("Failed to unmount boot environment")?;
             Ok(())
         }
         Commands::Rename { be_name, new_name } => {
             client
-                .rename(be_name, new_name)
+                .rename(be_name, new_name, root)
                 .context("Failed to rename boot environment")?;
             println!("Renamed boot environment '{}' to '{}'.", be_name, new_name);
             Ok(())
@@ -651,14 +673,14 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         } => {
             if *deactivate {
                 client
-                    .clear_boot_once()
+                    .clear_boot_once(root)
                     .context("Failed to remove temporary boot environment activation")?;
                 println!("Removed temporary boot environment activation.");
             } else {
                 // SAFETY: Safe due to required_unless_present.
                 let be_name = be_name.as_ref().unwrap();
                 client
-                    .activate(be_name, *temporary)
+                    .activate(be_name, *temporary, root)
                     .context("Failed to activate boot environment")?;
                 println!(
                     "Activated '{}'{}.",
@@ -670,14 +692,14 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
         }
         Commands::Rollback { be_name, snapshot } => {
             client
-                .rollback(be_name, snapshot)
+                .rollback(be_name, snapshot, root)
                 .context("Failed to rollback to snapshot")?;
             println!("Rolled back to '{}'.", snapshot);
             Ok(())
         }
         Commands::Hostid { be_name } => {
             match client
-                .hostid(be_name)
+                .hostid(be_name, root)
                 .context("Failed to retrieve host ID")?
             {
                 Some(id) => println!("0x{:08x}", id),
@@ -694,7 +716,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             description,
         } => {
             let snapshot_name = client
-                .snapshot(source.as_ref(), description.as_deref())
+                .snapshot(source.as_ref(), description.as_deref(), root)
                 .context("Failed to create snapshot")?;
             println!("Created '{}'.", snapshot_name);
             Ok(())
@@ -704,7 +726,7 @@ fn execute_command<T: Client + 'static>(command: &Commands, client: T) -> Result
             description,
         } => {
             client
-                .describe(&target, description)
+                .describe(&target, description, root)
                 .context("Failed to set description")?;
             println!("Set description for '{}'.", target);
             Ok(())
@@ -748,28 +770,28 @@ fn main() -> Result<()> {
     match cli.client {
         ClientType::Mock => {
             let client = EmulatorClient::sampled();
-            execute_command(&cli.command, client)
+            execute_command(&cli.command, None, client)
         }
         ClientType::Default => {
             // When the client type is "default", we check if the D-Bus service
             // is available but don't emit errors if it's not.
             #[cfg(feature = "dbus")]
             if let Ok(client) = ClientProxy::new() {
-                return execute_command(&cli.command, client);
+                return execute_command(&cli.command, None, client);
             } else if cli.verbose {
                 println!("D-Bus service not available, falling back to libzfs.");
             }
 
             // Otherwise we fall back to using libzfs.
-            execute_command(&cli.command, LibZfsClient::new(cli.beroot))
+            execute_command(&cli.command, None, LibZfsClient::new(cli.root))
         }
         #[cfg(feature = "dbus")]
         ClientType::DBus => {
             // When the client type is explicitly "dbus", errors are fatal.
             let client = ClientProxy::new()?;
-            execute_command(&cli.command, client)
+            execute_command(&cli.command, None, client)
         }
-        ClientType::LibZfs => execute_command(&cli.command, LibZfsClient::new(cli.beroot)),
+        ClientType::LibZfs => execute_command(&cli.command, None, LibZfsClient::new(cli.root)),
     }
 }
 
@@ -794,7 +816,7 @@ mod tests {
             parseable: false,
             snapshots: false,
         };
-        print_boot_environments(&client, &mut output, options).unwrap();
+        print_boot_environments(&client, None, &mut output, options).unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
             r"NAME     ACTIVE  MOUNTPOINT  SPACE  CREATED           DESCRIPTION
@@ -810,6 +832,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let mut output = Vec::new();
         print_boot_environments(
             &client,
+            None,
             &mut output,
             PrintOptions {
                 be_name: &None,
@@ -834,6 +857,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let mut output = Vec::new();
         print_boot_environments(
             &client,
+            None,
             &mut output,
             PrintOptions {
                 be_name: &Some("default".to_string()),
@@ -858,6 +882,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let mut output = Vec::new();
         print_boot_environments(
             &client,
+            None,
             &mut output,
             PrintOptions {
                 be_name: &None,
@@ -894,6 +919,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let mut output = Vec::new();
         print_boot_environments(
             &client,
+            None,
             &mut output,
             PrintOptions {
                 be_name: &None,
@@ -920,6 +946,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
             &Commands::Hostid {
                 be_name: "default".to_string(),
             },
+            None,
             client,
         );
         assert!(result.is_ok());
@@ -930,6 +957,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
             &Commands::Hostid {
                 be_name: "non-existent".to_string(),
             },
+            None,
             client2,
         );
         assert!(result.is_err());
@@ -952,6 +980,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
                 mountpoint: Some(PathBuf::from("/mnt/test")),
                 mode: MountMode::ReadWrite,
             },
+            None,
             client,
         );
         assert!(result.is_ok());
@@ -968,6 +997,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
                 mountpoint: None,
                 mode: MountMode::ReadOnly,
             },
+            None,
             client,
         );
         assert!(result.is_ok());
@@ -984,6 +1014,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
                 mountpoint: Some(PathBuf::from("/mnt/test")),
                 mode: MountMode::ReadWrite,
             },
+            None,
             client,
         );
         assert!(result.is_err());
@@ -997,7 +1028,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let client = EmulatorClient::sampled();
 
         // First mount a BE
-        let mount_result = client.mount("alt", None, MountMode::ReadWrite);
+        let mount_result = client.mount("alt", None, MountMode::ReadWrite, None);
         assert!(mount_result.is_ok());
 
         // Then unmount it
@@ -1006,6 +1037,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
                 be_name: "alt".to_string(),
                 force: false,
             },
+            None,
             client,
         );
         assert!(result.is_ok());
@@ -1017,6 +1049,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
                 be_name: "non-existent".to_string(),
                 force: false,
             },
+            None,
             client2,
         );
         assert!(result.is_err());
@@ -1031,6 +1064,7 @@ alt      -       -           8K     2021-06-10 06:11  Testing
         let mut output = Vec::new();
         print_boot_environments(
             &client,
+            None,
             &mut output,
             PrintOptions {
                 be_name: &None,
@@ -1056,6 +1090,7 @@ alt@backup                -       -           1K     2021-06-10 06:20  Manual ba
         output = Vec::new();
         print_boot_environments(
             &client,
+            None,
             &mut output,
             PrintOptions {
                 be_name: &None,

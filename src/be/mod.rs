@@ -305,6 +305,7 @@ pub trait Client: Send + Sync {
         description: Option<&str>,
         source: Option<&Label>,
         properties: &[String],
+        root: Option<&Root>,
     ) -> Result<(), Error>;
 
     fn create_empty(
@@ -313,48 +314,67 @@ pub trait Client: Send + Sync {
         description: Option<&str>,
         host_id: Option<&str>,
         properties: &[String],
+        root: Option<&Root>,
     ) -> Result<(), Error>;
 
-    fn destroy(&self, target: &Label, force_unmount: bool, snapshots: bool) -> Result<(), Error>;
+    fn destroy(
+        &self,
+        target: &Label,
+        force_unmount: bool,
+        snapshots: bool,
+        root: Option<&Root>,
+    ) -> Result<(), Error>;
 
     fn mount(
         &self,
         be_name: &str,
         mountpoint: Option<&Path>,
         mode: MountMode,
+        root: Option<&Root>,
     ) -> Result<PathBuf, Error>;
 
-    fn unmount(&self, be_name: &str, force: bool) -> Result<Option<PathBuf>, Error>;
+    fn unmount(
+        &self,
+        be_name: &str,
+        force: bool,
+        root: Option<&Root>,
+    ) -> Result<Option<PathBuf>, Error>;
 
-    fn hostid(&self, be_name: &str) -> Result<Option<u32>, Error>;
+    fn hostid(&self, be_name: &str, root: Option<&Root>) -> Result<Option<u32>, Error>;
 
-    fn rename(&self, be_name: &str, new_name: &str) -> Result<(), Error>;
+    fn rename(&self, be_name: &str, new_name: &str, root: Option<&Root>) -> Result<(), Error>;
 
-    fn activate(&self, be_name: &str, temporary: bool) -> Result<(), Error>;
+    fn activate(&self, be_name: &str, temporary: bool, root: Option<&Root>) -> Result<(), Error>;
 
     /// Clear temporary boot environment activation.
-    fn clear_boot_once(&self) -> Result<(), Error>;
+    fn clear_boot_once(&self, root: Option<&Root>) -> Result<(), Error>;
 
-    fn rollback(&self, be_name: &str, snapshot: &str) -> Result<(), Error>;
+    fn rollback(&self, be_name: &str, snapshot: &str, root: Option<&Root>) -> Result<(), Error>;
 
     /// Get a snapshot of the boot environments.
-    fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error>;
+    fn get_boot_environments(&self, root: Option<&Root>) -> Result<Vec<BootEnvironment>, Error>;
 
     /// Get snapshots for a specific boot environment.
-    fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error>;
+    fn get_snapshots(&self, be_name: &str, root: Option<&Root>) -> Result<Vec<Snapshot>, Error>;
 
     /// Create a snapshot of a source boot environment. When `source` is None,
     /// snapshot the active boot environment.
     ///
     /// Returns the final snapshot name (e.g. `be@snapshot`).
-    fn snapshot(&self, source: Option<&Label>, description: Option<&str>) -> Result<String, Error>;
+    fn snapshot(
+        &self,
+        source: Option<&Label>,
+        description: Option<&str>,
+        root: Option<&Root>,
+    ) -> Result<String, Error>;
 
     /// Create the ZFS dataset layout for boot environments. It is not an error
     /// if the required datasets already exist.
     fn init(&self, pool: &str) -> Result<(), Error>;
 
     /// Set the description for an existing boot environment or snapshot.
-    fn describe(&self, target: &Label, description: &str) -> Result<(), Error>;
+    fn describe(&self, target: &Label, description: &str, root: Option<&Root>)
+    -> Result<(), Error>;
 }
 
 /// Generate a snapshot name based on the current time.
