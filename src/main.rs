@@ -770,7 +770,7 @@ fn main() -> Result<()> {
     match cli.client {
         ClientType::Mock => {
             let client = EmulatorClient::sampled();
-            execute_command(&cli.command, None, client)
+            execute_command(&cli.command, cli.root.as_ref(), client)
         }
         ClientType::Default => {
             // When the client type is "default", we check if the D-Bus service

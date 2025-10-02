@@ -20,14 +20,14 @@ use super::{
 /// A boot environment client populated with static data that operates
 /// entirely in-memory with no side effects.
 pub struct EmulatorClient {
-    root: Root,
+    active_root: Root,
     bes: RwLock<Vec<BootEnvironment>>,
 }
 
 impl EmulatorClient {
     pub fn new(bes: Vec<BootEnvironment>) -> Self {
         Self {
-            root: Root::from_str("zfake/ROOT").unwrap(),
+            active_root: Root::from_str("zfake/ROOT").unwrap(),
             bes: RwLock::new(bes),
         }
     }
@@ -42,13 +42,18 @@ impl EmulatorClient {
     #[cfg(test)]
     pub fn empty() -> Self {
         Self {
-            root: Root::from_str("zfake/ROOT").unwrap(),
+            active_root: Root::from_str("zfake/ROOT").unwrap(),
             bes: RwLock::new(vec![]),
         }
     }
 
     pub fn sampled() -> Self {
         Self::new(sample_boot_environments())
+    }
+
+    /// Get the effective root to use for an operation.
+    fn effective_root<'a>(&'a self, root: Option<&'a Root>) -> &'a Root {
+        root.unwrap_or(&self.active_root)
     }
 }
 
@@ -59,10 +64,10 @@ impl Client for EmulatorClient {
         description: Option<&str>,
         source: Option<&Label>,
         _properties: &[String],
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<(), Error> {
-        // Validate the boot environment name (like libzfs does via self.root.append())
-        validate_be_name(be_name, self.root.as_str())?;
+        let root = self.effective_root(root);
+        validate_be_name(be_name, root.as_str())?;
 
         let mut bes = self.bes.write().unwrap();
 
@@ -75,10 +80,10 @@ impl Client for EmulatorClient {
                 validate_component(name, true)?;
                 validate_component(snapshot, false)?;
 
-                // Check if the source boot environment exists
+                // Check if the source boot environment exists with matching root
                 let source_be = bes
                     .iter()
-                    .find(|be| be.name == *name)
+                    .find(|be| be.name == *name && be.root == *root)
                     .ok_or_else(|| Error::not_found(&format!("{}@{}", name, snapshot)))?;
 
                 // Clone from snapshot - inherit space from source BE
@@ -90,10 +95,10 @@ impl Client for EmulatorClient {
                 // Validate that src is a valid component (not a path)
                 validate_component(name, true)?;
 
-                // Find the source boot environment to clone
+                // Find the source boot environment to clone with matching root
                 let source_be = bes
                     .iter()
-                    .find(|be| be.name == *name)
+                    .find(|be| be.name == *name && be.root == *root)
                     .ok_or_else(|| Error::not_found(name))?;
 
                 // Clone from existing BE - inherit space
@@ -102,25 +107,24 @@ impl Client for EmulatorClient {
             None => {
                 // Case #3: beadm create NAME, which creates the clone from a
                 // snapshot of the active boot environment.
-                // Clone from active boot environment, or use default space if none active
-                if let Some(active_be) = bes.iter().find(|be| be.active) {
-                    // Clone from active BE - inherit space
-                    active_be.space
-                } else {
-                    // No active BE (e.g., empty client) - use default space
-                    8192
-                }
+                let active_be = bes
+                    .iter()
+                    .find(|be| be.active && be.root == *root)
+                    .ok_or_else(|| Error::NoActiveBootEnvironment)?;
+
+                // Clone from active BE - inherit space
+                active_be.space
             }
         };
 
-        // Check for conflicts after determining the source is valid
-        if bes.iter().any(|be| be.name == be_name) {
+        // Check for conflicts after determining the source is valid (only within the same root)
+        if bes.iter().any(|be| be.name == be_name && be.root == *root) {
             return Err(Error::conflict(be_name));
         }
 
         bes.push(BootEnvironment {
             name: be_name.to_string(),
-            root: self.root.clone(),
+            root: root.clone(),
             guid: Self::generate_guid(be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
@@ -139,19 +143,20 @@ impl Client for EmulatorClient {
         description: Option<&str>,
         _host_id: Option<&str>,
         _properties: &[String],
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<(), Error> {
+        let root = self.effective_root(root);
         let mut bes = self.bes.write().unwrap();
 
-        // Check for conflicts.
-        if bes.iter().any(|be| be.name == be_name) {
+        // Check for conflicts (only within the same root).
+        if bes.iter().any(|be| be.name == be_name && be.root == *root) {
             return Err(Error::conflict(be_name));
         }
 
         // Create new empty boot environment
         bes.push(BootEnvironment {
             name: be_name.to_string(),
-            root: self.root.clone(),
+            root: root.clone(),
             guid: Self::generate_guid(be_name),
             description: description.map(|s| s.to_string()),
             mountpoint: None,
@@ -169,15 +174,20 @@ impl Client for EmulatorClient {
         target: &Label,
         force_unmount: bool,
         snapshots: bool,
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<(), Error> {
+        let root = self.effective_root(root);
+
         match target {
             Label::Name(be_name) => {
                 // Destroy a boot environment
                 // First, check if the BE exists and validate constraints
                 {
                     let bes = self.bes.read().unwrap();
-                    let be = match bes.iter().find(|be| be.name == *be_name) {
+                    let be = match bes
+                        .iter()
+                        .find(|be| be.name == *be_name && be.root == *root)
+                    {
                         Some(be) => be,
                         None => {
                             return Err(Error::NotFound {
@@ -204,15 +214,18 @@ impl Client for EmulatorClient {
                     unimplemented!("Mocking does not yet track snapshots");
                 }
 
-                // Now we can safely borrow mutably to remove the BE
-                self.bes.write().unwrap().retain(|x| x.name != *be_name);
+                // Now we can safely borrow mutably to remove the BE (matching both name and root)
+                self.bes
+                    .write()
+                    .unwrap()
+                    .retain(|x| !(x.name == *be_name && x.root == *root));
 
                 Ok(())
             }
             Label::Snapshot(be_name, _snapshot_name) => {
-                // Destroy a snapshot - for mock implementation, we just validate the BE exists
+                // Destroy a snapshot - for mock implementation, we just validate the BE exists with matching root
                 let bes = self.bes.read().unwrap();
-                if !bes.iter().any(|be| be.name == *be_name) {
+                if !bes.iter().any(|be| be.name == *be_name && be.root == *root) {
                     return Err(Error::not_found(be_name));
                 }
 
@@ -228,12 +241,13 @@ impl Client for EmulatorClient {
         be_name: &str,
         mountpoint: Option<&Path>,
         _mode: MountMode,
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<PathBuf, Error> {
+        let root = self.effective_root(root);
         let mut bes = self.bes.write().unwrap();
 
-        // Find the boot environment
-        let be = match bes.iter().find(|be| be.name == be_name) {
+        // Find the boot environment with matching root
+        let be = match bes.iter().find(|be| be.name == be_name && be.root == *root) {
             Some(be) => be,
             None => {
                 return Err(Error::NotFound {
@@ -281,17 +295,19 @@ impl Client for EmulatorClient {
         &self,
         target: &str,
         _force: bool,
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<Option<PathBuf>, Error> {
+        let root = self.effective_root(root);
         let mut bes = self.bes.write().unwrap();
 
-        // Target can be either a BE name or a mountpoint path
+        // Target can be either a BE name or a mountpoint path (with matching root)
         let be = match bes.iter_mut().find(|be| {
-            be.name == target
-                || be
-                    .mountpoint
-                    .as_ref()
-                    .map_or(false, |mp| mp.display().to_string() == target)
+            be.root == *root
+                && (be.name == target
+                    || be
+                        .mountpoint
+                        .as_ref()
+                        .map_or(false, |mp| mp.display().to_string() == target))
         }) {
             Some(be) => be,
             None => {
@@ -307,11 +323,12 @@ impl Client for EmulatorClient {
         Ok(mountpoint)
     }
 
-    fn hostid(&self, be_name: &str, _root: Option<&Root>) -> Result<Option<u32>, Error> {
+    fn hostid(&self, be_name: &str, root: Option<&Root>) -> Result<Option<u32>, Error> {
+        let root = self.effective_root(root);
         let bes = self.bes.read().unwrap();
 
-        // Find the boot environment
-        let be = match bes.iter().find(|be| be.name == be_name) {
+        // Find the boot environment with matching root
+        let be = match bes.iter().find(|be| be.name == be_name && be.root == *root) {
             Some(be) => be,
             None => {
                 return Err(Error::NotFound {
@@ -337,12 +354,16 @@ impl Client for EmulatorClient {
         }
     }
 
-    fn rename(&self, be_name: &str, new_name: &str, _root: Option<&Root>) -> Result<(), Error> {
-        validate_be_name(new_name, self.root.as_str())?;
+    fn rename(&self, be_name: &str, new_name: &str, root: Option<&Root>) -> Result<(), Error> {
+        let root = self.effective_root(root);
+        validate_be_name(new_name, root.as_str())?;
         let mut bes = self.bes.write().unwrap();
 
-        // Check if source BE exists
-        let be_index = match bes.iter().position(|be| be.name == be_name) {
+        // Check if source BE exists with matching root
+        let be_index = match bes
+            .iter()
+            .position(|be| be.name == be_name && be.root == *root)
+        {
             Some(index) => index,
             None => {
                 return Err(Error::NotFound {
@@ -351,8 +372,8 @@ impl Client for EmulatorClient {
             }
         };
 
-        // Check if new name already exists
-        if bes.iter().any(|be| be.name == new_name) {
+        // Check if new name already exists (only within the same root)
+        if bes.iter().any(|be| be.name == new_name && be.root == *root) {
             return Err(Error::Conflict {
                 name: new_name.to_string(),
             });
@@ -360,16 +381,19 @@ impl Client for EmulatorClient {
 
         // Perform the rename
         bes[be_index].name = new_name.to_string();
-        bes[be_index].root = self.root.clone();
 
         Ok(())
     }
 
-    fn activate(&self, be_name: &str, temporary: bool, _root: Option<&Root>) -> Result<(), Error> {
+    fn activate(&self, be_name: &str, temporary: bool, root: Option<&Root>) -> Result<(), Error> {
+        let root = self.effective_root(root);
         let mut bes = self.bes.write().unwrap();
 
-        // Find the target boot environment
-        let target_index = match bes.iter().position(|be| be.name == be_name) {
+        // Find the target boot environment with matching root
+        let target_index = match bes
+            .iter()
+            .position(|be| be.name == be_name && be.root == *root)
+        {
             Some(index) => index,
             None => {
                 return Err(Error::NotFound {
@@ -380,8 +404,8 @@ impl Client for EmulatorClient {
 
         if temporary {
             // Set temporary activation (boot_once only)
-            // Only one BE can have boot_once=true, and no BE should have next_boot=true when using temporary activation
-            for be in bes.iter_mut() {
+            // Only one BE can have boot_once=true within the same root, and no BE should have next_boot=true when using temporary activation
+            for be in bes.iter_mut().filter(|be| be.root == *root) {
                 be.boot_once = false;
                 be.next_boot = false;
             }
@@ -389,8 +413,8 @@ impl Client for EmulatorClient {
         } else {
             // Permanent activation - this would normally require a reboot
             // For simulation purposes, we'll set it as the next boot environment
-            // Only one BE can have next_boot=true, and no BE should have boot_once=true
-            for be in bes.iter_mut() {
+            // Only one BE can have next_boot=true within the same root, and no BE should have boot_once=true
+            for be in bes.iter_mut().filter(|be| be.root == *root) {
                 be.next_boot = false;
                 be.boot_once = false;
             }
@@ -400,10 +424,11 @@ impl Client for EmulatorClient {
         Ok(())
     }
 
-    fn clear_boot_once(&self, _root: Option<&Root>) -> Result<(), Error> {
+    fn clear_boot_once(&self, root: Option<&Root>) -> Result<(), Error> {
+        let root = self.effective_root(root);
         let mut bes = self.bes.write().unwrap();
 
-        let temporary_be_index = bes.iter().position(|be| be.boot_once);
+        let temporary_be_index = bes.iter().position(|be| be.boot_once && be.root == *root);
         if temporary_be_index.is_none() {
             return Ok(()); // Nothing to clear.
         }
@@ -414,16 +439,23 @@ impl Client for EmulatorClient {
 
         // Since the mock doesn't store the previously-activated boot
         // environment explicitly, we simulate the restoration by finding the
-        // *active* boot environment and setting that as next_boot.
-        if let Some(active_index) = bes.iter().position(|be| be.active) {
+        // *active* boot environment (within the same root) and setting that as next_boot.
+        if let Some(active_index) = bes.iter().position(|be| be.active && be.root == *root) {
             bes[active_index].next_boot = true;
         }
 
         Ok(())
     }
 
-    fn rollback(&self, be_name: &str, _snapshot: &str, _root: Option<&Root>) -> Result<(), Error> {
-        if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
+    fn rollback(&self, be_name: &str, _snapshot: &str, root: Option<&Root>) -> Result<(), Error> {
+        let root = self.effective_root(root);
+        if !self
+            .bes
+            .read()
+            .unwrap()
+            .iter()
+            .any(|be| be.name == be_name && be.root == *root)
+        {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
             });
@@ -431,12 +463,27 @@ impl Client for EmulatorClient {
         unimplemented!("Mocking does not yet track snapshots");
     }
 
-    fn get_boot_environments(&self, _root: Option<&Root>) -> Result<Vec<BootEnvironment>, Error> {
-        Ok(self.bes.read().unwrap().clone())
+    fn get_boot_environments(&self, root: Option<&Root>) -> Result<Vec<BootEnvironment>, Error> {
+        let root = self.effective_root(root);
+        Ok(self
+            .bes
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|be| be.root == *root)
+            .cloned()
+            .collect())
     }
 
-    fn get_snapshots(&self, be_name: &str, _root: Option<&Root>) -> Result<Vec<Snapshot>, Error> {
-        if !self.bes.read().unwrap().iter().any(|be| be.name == be_name) {
+    fn get_snapshots(&self, be_name: &str, root: Option<&Root>) -> Result<Vec<Snapshot>, Error> {
+        let root = self.effective_root(root);
+        if !self
+            .bes
+            .read()
+            .unwrap()
+            .iter()
+            .any(|be| be.name == be_name && be.root == *root)
+        {
             return Err(Error::NotFound {
                 name: be_name.to_string(),
             });
@@ -448,8 +495,9 @@ impl Client for EmulatorClient {
         &self,
         source: Option<&Label>,
         _description: Option<&str>,
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<String, Error> {
+        let root = self.effective_root(root);
         let (name, snapshot) = match source {
             Some(label) => match label {
                 Label::Name(name) => (name.clone(), generate_snapshot_name()),
@@ -460,14 +508,20 @@ impl Client for EmulatorClient {
                 let bes = self.bes.read().unwrap();
                 let active_be = bes
                     .iter()
-                    .find(|be| be.active)
+                    .find(|be| be.active && be.root == *root)
                     .ok_or_else(|| Error::NoActiveBootEnvironment)?;
                 (active_be.name.clone(), generate_snapshot_name())
             }
         };
 
-        // Ensure the boot environment exists
-        if !self.bes.read().unwrap().iter().any(|be| be.name == name) {
+        // Ensure the boot environment exists with matching root
+        if !self
+            .bes
+            .read()
+            .unwrap()
+            .iter()
+            .any(|be| be.name == name && be.root == *root)
+        {
             return Err(Error::not_found(&name));
         }
 
@@ -493,21 +547,31 @@ impl Client for EmulatorClient {
         &self,
         target: &Label,
         description: &str,
-        _root: Option<&Root>,
+        root: Option<&Root>,
     ) -> Result<(), Error> {
+        let root = self.effective_root(root);
         match target {
             Label::Snapshot(name, _snapshot) => {
                 // For mock implementation, we can't actually modify snapshots
                 // since they're generated on-the-fly, but we validate at least
-                // that the boot environment exists and then pretend to succeed.
-                if !self.bes.read().unwrap().iter().any(|be| be.name == *name) {
+                // that the boot environment exists with matching root and then pretend to succeed.
+                if !self
+                    .bes
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .any(|be| be.name == *name && be.root == *root)
+                {
                     return Err(Error::not_found(name));
                 }
                 Ok(())
             }
             Label::Name(name) => {
                 let mut bes = self.bes.write().unwrap();
-                if let Some(be) = bes.iter_mut().find(|be| be.name == *name) {
+                if let Some(be) = bes
+                    .iter_mut()
+                    .find(|be| be.name == *name && be.root == *root)
+                {
                     be.description = Some(description.to_string());
                     Ok(())
                 } else {
@@ -618,23 +682,37 @@ mod tests {
     fn test_emulated_create() {
         let client = EmulatorClient::empty();
 
-        // Test creating a new boot environment
+        // Test creating without a source when there's no active BE should fail
+        let result = client.create("test-be", Some("Test description"), None, &[], None);
+        assert!(matches!(result, Err(Error::NoActiveBootEnvironment)));
+
+        // Create a source BE first using create_empty
+        client
+            .create_empty("source-be", None, None, &[], None)
+            .unwrap();
+
+        // Mark it as active so we can clone from it
+        let mut bes = client.bes.write().unwrap();
+        bes[0].active = true;
+        drop(bes);
+
+        // Now creating from active BE should work
         let result = client.create("test-be", Some("Test description"), None, &[], None);
         assert!(result.is_ok());
 
         // Verify it was added
         let bes = client.get_boot_environments(None).unwrap();
-        assert_eq!(bes.len(), 1);
-        assert_eq!(bes[0].name, "test-be");
-        assert_eq!(bes[0].description, Some("Test description".to_string()));
+        assert_eq!(bes.len(), 2);
+        let test_be = bes.iter().find(|be| be.name == "test-be").unwrap();
+        assert_eq!(test_be.description, Some("Test description".to_string()));
 
         // Test creating a duplicate should fail
         let result = client.create("test-be", None, None, &[], None);
         assert!(matches!(result, Err(Error::Conflict { name }) if name == "test-be"));
 
-        // Verify we still have only one
+        // Verify we still have only two
         let bes = client.get_boot_environments(None).unwrap();
-        assert_eq!(bes.len(), 1);
+        assert_eq!(bes.len(), 2);
     }
 
     #[test]
@@ -749,8 +827,8 @@ mod tests {
         let bes = client.get_boot_environments(None).unwrap();
         assert_eq!(bes.len(), 0);
 
-        // Create a boot environment
-        let result = client.create("temp-be", Some("Temporary BE"), None, &[], None);
+        // Create a boot environment using create_empty (since there's no active BE)
+        let result = client.create_empty("temp-be", Some("Temporary BE"), None, &[], None);
         assert!(result.is_ok());
 
         // Verify it exists
@@ -1247,8 +1325,8 @@ mod tests {
     fn test_emulated_integration_workflow() {
         let client = EmulatorClient::new(vec![]);
 
-        // Create a boot environment
-        let result = client.create("test-be", Some("Integration test"), None, &[], None);
+        // Create a boot environment using create_empty (no active BE yet)
+        let result = client.create_empty("test-be", Some("Integration test"), None, &[], None);
         assert!(result.is_ok());
 
         // Mount it
@@ -1737,5 +1815,377 @@ mod tests {
         let bes = client.get_boot_environments(None).unwrap();
         let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
         assert_eq!(alt_be.description, Some("".to_string()));
+    }
+
+    // Tests for root parameter functionality
+
+    #[test]
+    fn test_root_parameter_get_boot_environments_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Get boot environments with matching root
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        assert_eq!(bes.len(), 2);
+        assert!(bes.iter().all(|be| be.root == root));
+    }
+
+    #[test]
+    fn test_root_parameter_get_boot_environments_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Get boot environments with non-matching root - should return empty
+        let bes = client.get_boot_environments(Some(&other_root)).unwrap();
+        assert_eq!(bes.len(), 0);
+    }
+
+    #[test]
+    fn test_root_parameter_create_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Create with matching root should work
+        let result = client.create("test-be", Some("Test"), None, &[], Some(&root));
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        let test_be = bes.iter().find(|be| be.name == "test-be").unwrap();
+        assert_eq!(test_be.root, root);
+    }
+
+    #[test]
+    fn test_root_parameter_create_with_different_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Create with different root but no active BE in that root should fail
+        let result = client.create("test-be", Some("Test"), None, &[], Some(&other_root));
+        assert!(matches!(result, Err(Error::NoActiveBootEnvironment)));
+
+        // Use create_empty to create a BE in the other root
+        let result = client.create_empty("test-be", Some("Test"), None, &[], Some(&other_root));
+        assert!(result.is_ok());
+
+        // Should be in the other root
+        let bes = client.get_boot_environments(Some(&other_root)).unwrap();
+        assert_eq!(bes.len(), 1);
+        assert_eq!(bes[0].name, "test-be");
+        assert_eq!(bes[0].root, other_root);
+
+        // Should not be in the default root
+        let default_root = Root::from_str("zfake/ROOT").unwrap();
+        let bes = client.get_boot_environments(Some(&default_root)).unwrap();
+        assert!(!bes.iter().any(|be| be.name == "test-be"));
+    }
+
+    #[test]
+    fn test_root_parameter_destroy_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Destroy with matching root should work
+        let result = client.destroy(&Label::Name("alt".to_string()), false, false, Some(&root));
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        assert!(!bes.iter().any(|be| be.name == "alt"));
+    }
+
+    #[test]
+    fn test_root_parameter_destroy_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Destroy with non-matching root should fail
+        let result = client.destroy(
+            &Label::Name("alt".to_string()),
+            false,
+            false,
+            Some(&other_root),
+        );
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "alt"));
+
+        // Verify alt still exists in default root
+        let default_root = Root::from_str("zfake/ROOT").unwrap();
+        let bes = client.get_boot_environments(Some(&default_root)).unwrap();
+        assert!(bes.iter().any(|be| be.name == "alt"));
+    }
+
+    #[test]
+    fn test_root_parameter_mount_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Mount with matching root should work
+        let result = client.mount("alt", None, MountMode::ReadWrite, Some(&root));
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
+        assert!(alt_be.mountpoint.is_some());
+    }
+
+    #[test]
+    fn test_root_parameter_mount_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Mount with non-matching root should fail
+        let result = client.mount("alt", None, MountMode::ReadWrite, Some(&other_root));
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "alt"));
+    }
+
+    #[test]
+    fn test_root_parameter_activate_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Activate with matching root should work
+        let result = client.activate("alt", false, Some(&root));
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
+        assert!(alt_be.next_boot);
+    }
+
+    #[test]
+    fn test_root_parameter_activate_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Activate with non-matching root should fail
+        let result = client.activate("alt", false, Some(&other_root));
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "alt"));
+    }
+
+    #[test]
+    fn test_root_parameter_multiple_roots_same_client() {
+        let client = EmulatorClient::empty();
+        let root1 = Root::from_str("zpool1/ROOT").unwrap();
+        let root2 = Root::from_str("zpool2/ROOT").unwrap();
+
+        // Create BEs in different roots with the same name (using create_empty since no active BEs)
+        client
+            .create_empty("same-name", Some("In root1"), None, &[], Some(&root1))
+            .unwrap();
+        client
+            .create_empty("same-name", Some("In root2"), None, &[], Some(&root2))
+            .unwrap();
+
+        // Each root should see only its own BE
+        let bes1 = client.get_boot_environments(Some(&root1)).unwrap();
+        assert_eq!(bes1.len(), 1);
+        assert_eq!(bes1[0].description, Some("In root1".to_string()));
+
+        let bes2 = client.get_boot_environments(Some(&root2)).unwrap();
+        assert_eq!(bes2.len(), 1);
+        assert_eq!(bes2[0].description, Some("In root2".to_string()));
+
+        // Destroying in one root should not affect the other
+        client
+            .destroy(
+                &Label::Name("same-name".to_string()),
+                false,
+                false,
+                Some(&root1),
+            )
+            .unwrap();
+
+        let bes1 = client.get_boot_environments(Some(&root1)).unwrap();
+        assert_eq!(bes1.len(), 0);
+
+        let bes2 = client.get_boot_environments(Some(&root2)).unwrap();
+        assert_eq!(bes2.len(), 1);
+    }
+
+    #[test]
+    fn test_root_parameter_create_from_source_in_same_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Create from source in the same root should work
+        let result = client.create(
+            "clone-of-default",
+            None,
+            Some(&Label::from_str("default").unwrap()),
+            &[],
+            Some(&root),
+        );
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        assert!(bes.iter().any(|be| be.name == "clone-of-default"));
+    }
+
+    #[test]
+    fn test_root_parameter_create_from_source_in_different_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Create from source in a different root should fail (source not found)
+        let result = client.create(
+            "clone-of-default",
+            None,
+            Some(&Label::from_str("default").unwrap()),
+            &[],
+            Some(&other_root),
+        );
+        assert!(matches!(result, Err(Error::NotFound { .. })));
+    }
+
+    #[test]
+    fn test_root_parameter_rename_within_same_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Rename within the same root should work
+        let result = client.rename("alt", "alt-renamed", Some(&root));
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        assert!(bes.iter().any(|be| be.name == "alt-renamed"));
+        assert!(!bes.iter().any(|be| be.name == "alt"));
+    }
+
+    #[test]
+    fn test_root_parameter_rename_conflict_only_in_same_root() {
+        let client = EmulatorClient::empty();
+        let root1 = Root::from_str("zpool1/ROOT").unwrap();
+        let root2 = Root::from_str("zpool2/ROOT").unwrap();
+
+        // Create "target" in root1 and "source" in root2 (using create_empty since no active BEs)
+        client
+            .create_empty("target", None, None, &[], Some(&root1))
+            .unwrap();
+        client
+            .create_empty("source", None, None, &[], Some(&root2))
+            .unwrap();
+
+        // Rename source to target in root2 should work (no conflict across roots)
+        let result = client.rename("source", "target", Some(&root2));
+        assert!(result.is_ok());
+
+        // Both roots should now have a BE named "target"
+        let bes1 = client.get_boot_environments(Some(&root1)).unwrap();
+        assert_eq!(bes1.len(), 1);
+        assert_eq!(bes1[0].name, "target");
+
+        let bes2 = client.get_boot_environments(Some(&root2)).unwrap();
+        assert_eq!(bes2.len(), 1);
+        assert_eq!(bes2[0].name, "target");
+    }
+
+    #[test]
+    fn test_root_parameter_activate_only_affects_same_root() {
+        let client = EmulatorClient::empty();
+        let root1 = Root::from_str("zpool1/ROOT").unwrap();
+        let root2 = Root::from_str("zpool2/ROOT").unwrap();
+
+        // Create BEs in different roots (using create_empty since no active BEs)
+        client
+            .create_empty("be1", None, None, &[], Some(&root1))
+            .unwrap();
+        client
+            .create_empty("be2", None, None, &[], Some(&root1))
+            .unwrap();
+        client
+            .create_empty("be3", None, None, &[], Some(&root2))
+            .unwrap();
+
+        // Activate be1 in root1
+        client.activate("be1", false, Some(&root1)).unwrap();
+
+        // Check that only be1 is activated in root1
+        let bes1 = client.get_boot_environments(Some(&root1)).unwrap();
+        assert!(bes1.iter().find(|be| be.name == "be1").unwrap().next_boot);
+        assert!(!bes1.iter().find(|be| be.name == "be2").unwrap().next_boot);
+
+        // Check that be3 in root2 is not affected
+        let bes2 = client.get_boot_environments(Some(&root2)).unwrap();
+        assert!(!bes2.iter().find(|be| be.name == "be3").unwrap().next_boot);
+    }
+
+    #[test]
+    fn test_root_parameter_get_snapshots_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Get snapshots with matching root should work
+        let result = client.get_snapshots("default", Some(&root));
+        assert!(result.is_ok());
+        assert!(result.unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_root_parameter_get_snapshots_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Get snapshots with non-matching root should fail
+        let result = client.get_snapshots("default", Some(&other_root));
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "default"));
+    }
+
+    #[test]
+    fn test_root_parameter_snapshot_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Snapshot with matching root should work
+        let result = client.snapshot(
+            Some(&Label::from_str("default").unwrap()),
+            Some("Test snapshot"),
+            Some(&root),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap().starts_with("default@"));
+    }
+
+    #[test]
+    fn test_root_parameter_snapshot_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Snapshot with non-matching root should fail
+        let result = client.snapshot(
+            Some(&Label::from_str("default").unwrap()),
+            Some("Test snapshot"),
+            Some(&other_root),
+        );
+        assert!(matches!(result, Err(Error::NotFound { .. })));
+    }
+
+    #[test]
+    fn test_root_parameter_describe_with_matching_root() {
+        let client = EmulatorClient::sampled();
+        let root = Root::from_str("zfake/ROOT").unwrap();
+
+        // Describe with matching root should work
+        let result = client.describe(
+            &Label::from_str("alt").unwrap(),
+            "Updated description",
+            Some(&root),
+        );
+        assert!(result.is_ok());
+
+        let bes = client.get_boot_environments(Some(&root)).unwrap();
+        let alt_be = bes.iter().find(|be| be.name == "alt").unwrap();
+        assert_eq!(alt_be.description, Some("Updated description".to_string()));
+    }
+
+    #[test]
+    fn test_root_parameter_describe_with_mismatched_root() {
+        let client = EmulatorClient::sampled();
+        let other_root = Root::from_str("zother/ROOT").unwrap();
+
+        // Describe with non-matching root should fail
+        let result = client.describe(
+            &Label::from_str("alt").unwrap(),
+            "Updated description",
+            Some(&other_root),
+        );
+        assert!(matches!(result, Err(Error::NotFound { name }) if name == "alt"));
     }
 }
