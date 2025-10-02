@@ -161,9 +161,8 @@ pub enum MountMode {
 pub struct BootEnvironment {
     /// The name of this boot environment.
     pub name: String,
-    /// The ZFS dataset path (e.g., `zroot/ROOT/default`).
-    #[allow(dead_code)]
-    pub path: String,
+    /// The boot environment root.
+    pub root: Root,
     /// The ZFS dataset GUID.
     pub guid: u64,
     /// A description for this boot environment, if any.
@@ -186,9 +185,8 @@ pub struct BootEnvironment {
 pub struct Snapshot {
     /// The name of this snapshot (e.g., `default@snapshot`).
     pub name: String,
-    /// The ZFS snapshot path (e.g., `zroot/ROOT/default@snapshot`).
-    #[allow(dead_code)]
-    pub path: String,
+    /// The boot environment root.
+    pub root: Root,
     /// Optional description for this snapshot.
     pub description: Option<String>,
     /// Bytes used by this snapshot.
@@ -254,7 +252,9 @@ impl std::fmt::Display for Label {
 
 /// A "boot environment root", i.e. a dataset whose children are all boot
 /// environments.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "dbus", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "dbus", serde(transparent))]
 pub struct Root {
     path: String,
 }
@@ -274,6 +274,11 @@ impl Root {
     pub(crate) fn as_str(&self) -> &str {
         self.path.as_str()
     }
+}
+
+#[cfg(feature = "zbus")]
+impl zvariant::Type for Root {
+    const SIGNATURE: &'static zvariant::Signature = &zvariant::Signature::Str;
 }
 
 impl FromStr for Root {

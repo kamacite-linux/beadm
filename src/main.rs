@@ -878,9 +878,10 @@ alt      -       -           8K     2021-06-10 06:11  Testing
 
     #[test]
     fn test_print_boot_environments_with_boot_once_flag() {
+        use std::str::FromStr;
         let client = EmulatorClient::new(vec![BootEnvironment {
             name: "temp-boot".to_string(),
-            path: "zfake/ROOT/temp-boot".to_string(),
+            root: Root::from_str("zfake/ROOT").unwrap(),
             guid: EmulatorClient::generate_guid("temp-boot"),
             description: None,
             mountpoint: None,

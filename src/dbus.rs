@@ -5,7 +5,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use crate::be::Error as BeError;
-use crate::be::{BootEnvironment, Client, Label, MountMode, Snapshot};
+use crate::be::{BootEnvironment, Client, Label, MountMode, Root, Snapshot};
 use event_listener::Listener;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -246,7 +246,7 @@ impl Client for ClientProxy {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, BeError> {
-        let snapshots_data: Vec<(String, String, String, u64, i64)> = self
+        let snapshots_data: Vec<(String, Root, String, u64, i64)> = self
             .connection
             .call_method(
                 Some(SERVICE_NAME),
@@ -260,9 +260,9 @@ impl Client for ClientProxy {
 
         let snapshots = snapshots_data
             .into_iter()
-            .map(|(name, path, description, space, created)| Snapshot {
+            .map(|(name, root, description, space, created)| Snapshot {
                 name,
-                path,
+                root,
                 description: if description.is_empty() {
                     None
                 } else {
@@ -354,7 +354,7 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         // Check if any fields have actually changed.
         struct Changed {
             name: bool,
-            path: bool,
+            root: bool,
             description: bool,
             mountpoint: bool,
             next_boot: bool,
@@ -366,7 +366,7 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
             .read() // Use map() to simplify guard lifetime across await calls below.
             .map(|stored| Changed {
                 name: stored.name != current.name,
-                path: stored.path != current.path,
+                root: stored.root != current.root,
                 description: stored.description != current.description,
                 mountpoint: stored.mountpoint != current.mountpoint,
                 next_boot: stored.next_boot != current.next_boot,
@@ -376,7 +376,7 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
             .expect("Failed to acquire read lock");
 
         if !(changed.name
-            || changed.path
+            || changed.root
             || changed.description
             || changed.mountpoint
             || changed.next_boot
@@ -395,8 +395,8 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         if changed.name {
             self.name_changed(signal_emitter).await?;
         }
-        if changed.path {
-            self.path_changed(signal_emitter).await?;
+        if changed.root {
+            self.root_changed(signal_emitter).await?;
         }
         if changed.description {
             self.description_changed(signal_emitter).await?;
@@ -426,10 +426,10 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         self.data.read().unwrap().name.clone()
     }
 
-    /// The ZFS dataset path (e.g., `zroot/ROOT/default`).
+    /// The boot environment root.
     #[zbus(property)]
-    fn path(&self) -> String {
-        self.data.read().unwrap().path.clone()
+    fn root(&self) -> String {
+        self.data.read().unwrap().root.as_str().to_string()
     }
 
     /// The ZFS dataset GUID.
@@ -603,14 +603,14 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
 
     /// Get snapshots for this boot environment.
     #[zbus(out_args("snapshots"))]
-    fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, String, String, u64, i64)>> {
+    fn get_snapshots(&self) -> zbus::fdo::Result<Vec<(String, Root, String, u64, i64)>> {
         let snapshots = self.client.get_snapshots(&self.data.read().unwrap().name)?;
         Ok(snapshots
             .into_iter()
             .map(|snap| {
                 (
                     snap.name,
-                    snap.path,
+                    snap.root,
                     snap.description.unwrap_or_default(),
                     snap.space,
                     snap.created,
@@ -1007,14 +1007,14 @@ impl<T: Client + 'static> BootEnvironmentManager<T> {
     fn get_snapshots(
         &self,
         be_name: &str,
-    ) -> zbus::fdo::Result<Vec<(String, String, String, u64, i64)>> {
+    ) -> zbus::fdo::Result<Vec<(String, Root, String, u64, i64)>> {
         let snapshots = self.client.get_snapshots(be_name)?;
         Ok(snapshots
             .into_iter()
             .map(|snap| {
                 (
                     snap.name,
-                    snap.path,
+                    snap.root,
                     snap.description.unwrap_or_default(),
                     snap.space,
                     snap.created,

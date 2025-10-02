@@ -430,8 +430,9 @@ impl Client for LibZfsClient {
     }
 
     fn get_boot_environments(&self) -> Result<Vec<BootEnvironment>, Error> {
+        let root = self.get_root()?;
         let lzh = LibHandle::get();
-        let root_dataset = Dataset::filesystem(&lzh, self.get_root()?)?;
+        let root_dataset = Dataset::filesystem(&lzh, root)?;
         let rootfs = get_rootfs()?;
         let bootfs = self.get_next_boot(&lzh)?;
         let previous_bootfs = self.get_previous_boot(&lzh)?;
@@ -457,7 +458,7 @@ impl Client for LibZfsClient {
 
             bes.push(BootEnvironment {
                 name: path.basename(),
-                path: path.to_string(),
+                root: Root::from(root.clone()),
                 guid: dataset.get_guid(),
                 description: dataset.get_user_property(DESCRIPTION_PROP),
                 mountpoint: dataset.get_mountpoint(),
@@ -473,7 +474,8 @@ impl Client for LibZfsClient {
     }
 
     fn get_snapshots(&self, be_name: &str) -> Result<Vec<Snapshot>, Error> {
-        let be_path = self.get_root()?.append(be_name)?;
+        let root = self.get_root()?;
+        let be_path = root.append(be_name)?;
         let lzh = LibHandle::get();
         let dataset = Dataset::filesystem(&lzh, &be_path)?;
         let mut snapshots = Vec::new();
@@ -481,7 +483,7 @@ impl Client for LibZfsClient {
             if let Some(path) = snapshot.get_name() {
                 snapshots.push(Snapshot {
                     name: path.basename(),
-                    path: path.to_string(),
+                    root: Root::from(root.clone()),
                     description: snapshot.get_user_property(DESCRIPTION_PROP),
                     space: snapshot.get_used_space(),
                     created: snapshot.get_creation_time(),
