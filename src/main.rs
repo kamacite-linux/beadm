@@ -4,23 +4,23 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::fs;
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use chrono::TimeZone;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::fs;
-use std::path::PathBuf;
+
+use be::{
+    BootEnvironment, Client, EmulatorClient, Error, Label, LibZfsClient, MountMode, Root, Snapshot,
+    format_zfs_bytes, is_temp_mountpoint,
+};
 
 mod be;
 #[cfg(feature = "dbus")]
 mod dbus;
 #[cfg(feature = "hooks")]
 mod hooks;
-
-use be::mock::EmulatorClient;
-use be::zfs::{LibZfsClient, format_zfs_bytes};
-use be::{BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot, is_temp_mountpoint};
-#[cfg(feature = "dbus")]
-use dbus::{ClientProxy, serve};
 
 #[derive(Parser)]
 #[command(version, about = "Boot Environment Administration")]
@@ -745,7 +745,7 @@ fn execute_command<T: Client + 'static>(
                 .enable_all()
                 .build()
                 .expect("launch of a multi-threaded tokio runtime")
-                .block_on(serve(client, *user))
+                .block_on(dbus::serve(client, *user))
                 .context("Failed to start D-Bus service")?;
             Ok(())
         }
@@ -776,7 +776,7 @@ fn main() -> Result<()> {
             // When the client type is "default", we check if the D-Bus service
             // is available but don't emit errors if it's not.
             #[cfg(feature = "dbus")]
-            if let Ok(client) = ClientProxy::new() {
+            if let Ok(client) = dbus::ClientProxy::new() {
                 return execute_command(&cli.command, cli.root.as_ref(), client);
             } else if cli.verbose {
                 println!("D-Bus service not available, falling back to libzfs.");
@@ -788,7 +788,7 @@ fn main() -> Result<()> {
         #[cfg(feature = "dbus")]
         ClientType::DBus => {
             // When the client type is explicitly "dbus", errors are fatal.
-            let client = ClientProxy::new()?;
+            let client = dbus::ClientProxy::new()?;
             execute_command(&cli.command, cli.root.as_ref(), client)
         }
         ClientType::LibZfs => execute_command(&cli.command, cli.root.as_ref(), LibZfsClient::new()),

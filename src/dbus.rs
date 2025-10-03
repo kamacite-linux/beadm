@@ -4,18 +4,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::be::Error as BeError;
-use crate::be::{BootEnvironment, Client, Label, MountMode, Root, Snapshot};
-use event_listener::Listener;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
+
+use event_listener::Listener;
 use tracing;
 use tracing_subscriber;
 use zbus::object_server::SignalEmitter;
 use zbus::{blocking, interface};
 use zvariant::ObjectPath;
+
+use crate::be::{BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot};
 
 // D-Bus service constants
 const SERVICE_NAME: &str = "ca.kamacite.BootEnvironments1";
@@ -42,7 +43,7 @@ impl ClientProxy {
     /// service or D-Bus itself is unavailable.
     ///
     /// This will also ping the D-Bus service to check if it's available.
-    pub fn new() -> Result<Self, BeError> {
+    pub fn new() -> Result<Self, Error> {
         // This is equivalent to async_io::block_on(zbus::Connection::system())?.
         let connection = zbus::blocking::Connection::system()?;
         // Look up the ActiveRoot property, which is an indirect way to check if
@@ -75,7 +76,7 @@ impl Client for ClientProxy {
         source: Option<&Label>,
         properties: &[String],
         root: Option<&Root>,
-    ) -> Result<(), BeError> {
+    ) -> Result<(), Error> {
         let desc = description.unwrap_or("");
         let src = source.map(|label| label.to_string()).unwrap_or_default();
         let props: Vec<String> = properties.to_vec();
@@ -103,7 +104,7 @@ impl Client for ClientProxy {
         host_id: Option<&str>,
         properties: &[String],
         root: Option<&Root>,
-    ) -> Result<(), BeError> {
+    ) -> Result<(), Error> {
         let desc = description.unwrap_or("");
         let hid = host_id.unwrap_or("");
         let props: Vec<String> = properties.to_vec();
@@ -130,7 +131,7 @@ impl Client for ClientProxy {
         force_unmount: bool,
         snapshots: bool,
         root: Option<&Root>,
-    ) -> Result<(), BeError> {
+    ) -> Result<(), Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         match target {
             Label::Name(name) => self.connection.call_method(
@@ -157,7 +158,7 @@ impl Client for ClientProxy {
         mountpoint: Option<&Path>,
         mode: MountMode,
         root: Option<&Root>,
-    ) -> Result<PathBuf, BeError> {
+    ) -> Result<PathBuf, Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         let read_only = match mode {
             MountMode::ReadOnly => true,
@@ -183,7 +184,7 @@ impl Client for ClientProxy {
         be_name: &str,
         force: bool,
         root: Option<&Root>,
-    ) -> Result<Option<PathBuf>, BeError> {
+    ) -> Result<Option<PathBuf>, Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         let result: String = self
             .connection
@@ -204,12 +205,12 @@ impl Client for ClientProxy {
         }
     }
 
-    fn hostid(&self, _be_name: &str, _root: Option<&Root>) -> Result<Option<u32>, BeError> {
+    fn hostid(&self, _be_name: &str, _root: Option<&Root>) -> Result<Option<u32>, Error> {
         // TODO: Decide whether to implement this.
         Ok(None)
     }
 
-    fn rename(&self, be_name: &str, new_name: &str, root: Option<&Root>) -> Result<(), BeError> {
+    fn rename(&self, be_name: &str, new_name: &str, root: Option<&Root>) -> Result<(), Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         self.connection.call_method(
             Some(SERVICE_NAME),
@@ -221,7 +222,7 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn activate(&self, be_name: &str, temporary: bool, root: Option<&Root>) -> Result<(), BeError> {
+    fn activate(&self, be_name: &str, temporary: bool, root: Option<&Root>) -> Result<(), Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         self.connection.call_method(
             Some(SERVICE_NAME),
@@ -233,7 +234,7 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn clear_boot_once(&self, root: Option<&Root>) -> Result<(), BeError> {
+    fn clear_boot_once(&self, root: Option<&Root>) -> Result<(), Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         self.connection.call_method(
             Some(SERVICE_NAME),
@@ -245,7 +246,7 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn rollback(&self, be_name: &str, snapshot: &str, root: Option<&Root>) -> Result<(), BeError> {
+    fn rollback(&self, be_name: &str, snapshot: &str, root: Option<&Root>) -> Result<(), Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         self.connection.call_method(
             Some(SERVICE_NAME),
@@ -257,10 +258,10 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn get_boot_environments(&self, root: Option<&Root>) -> Result<Vec<BootEnvironment>, BeError> {
+    fn get_boot_environments(&self, root: Option<&Root>) -> Result<Vec<BootEnvironment>, Error> {
         let root = match root.or(self.active_root.as_ref()) {
             Some(root) => root,
-            None => return Err(BeError::NoActiveBootEnvironment),
+            None => return Err(Error::NoActiveBootEnvironment),
         };
         let body = self
             .connection
@@ -287,7 +288,7 @@ impl Client for ClientProxy {
         Ok(boot_environments)
     }
 
-    fn get_snapshots(&self, be_name: &str, root: Option<&Root>) -> Result<Vec<Snapshot>, BeError> {
+    fn get_snapshots(&self, be_name: &str, root: Option<&Root>) -> Result<Vec<Snapshot>, Error> {
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         let snapshots_data: Vec<(String, Root, String, u64, i64)> = self
             .connection
@@ -324,7 +325,7 @@ impl Client for ClientProxy {
         source: Option<&Label>,
         description: Option<&str>,
         root: Option<&Root>,
-    ) -> Result<String, BeError> {
+    ) -> Result<String, Error> {
         let src = source.map(|label| label.to_string()).unwrap_or_default();
         let desc = description.unwrap_or("");
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
@@ -342,7 +343,7 @@ impl Client for ClientProxy {
         Ok(result)
     }
 
-    fn init(&self, pool: &str) -> Result<(), BeError> {
+    fn init(&self, pool: &str) -> Result<(), Error> {
         let _result: () = self
             .connection
             .call_method(
@@ -362,7 +363,7 @@ impl Client for ClientProxy {
         target: &Label,
         description: &str,
         root: Option<&Root>,
-    ) -> Result<(), BeError> {
+    ) -> Result<(), Error> {
         let target_str = target.to_string();
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
         self.connection.call_method(
@@ -894,7 +895,7 @@ impl<T: Client + 'static> BootEnvironmentManager<T> {
             .into_iter()
             .find(|be| be.name == name)
             .map(|be| be.guid)
-            .ok_or_else(|| BeError::not_found(name))?;
+            .ok_or_else(|| Error::not_found(name))?;
 
         tracing::info!(
             name,
@@ -934,7 +935,7 @@ impl<T: Client + 'static> BootEnvironmentManager<T> {
             .into_iter()
             .find(|be| be.name == name)
             .map(|be| be.guid)
-            .ok_or_else(|| BeError::not_found(name))?;
+            .ok_or_else(|| Error::not_found(name))?;
 
         tracing::info!(name, description = desc, "Created empty boot environment");
         self.refresh(conn.object_server()).await?;

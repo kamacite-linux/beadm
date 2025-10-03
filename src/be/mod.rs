@@ -4,18 +4,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
 use clap::ValueEnum;
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-};
 use thiserror::Error as ThisError;
 #[cfg(feature = "dbus")]
 use zvariant::{DeserializeDict, SerializeDict, Type};
 
-pub mod mock;
-pub mod validation;
-pub mod zfs;
+mod mock;
+mod validation;
+mod zfs;
+
+pub use mock::EmulatorClient;
+pub use zfs::{LibZfsClient, format_zfs_bytes};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
