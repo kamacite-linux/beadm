@@ -647,6 +647,10 @@ impl Client for LibZfsClient {
         };
         dataset.set_property(&lzh, DESCRIPTION_PROP, description)
     }
+
+    fn active_root(&self) -> Option<&Root> {
+        self.active_root.as_ref()
+    }
 }
 
 /// Safe wrapper for various operations on a ZFS dataset handle.

@@ -34,6 +34,7 @@ fn be_object_path(guid: u64) -> ObjectPath<'static> {
 // Implements the traditional `beadm` commands as D-Bus method calls.
 pub struct ClientProxy {
     connection: blocking::Connection,
+    active_root: Option<Root>,
 }
 
 impl ClientProxy {
@@ -44,14 +45,25 @@ impl ClientProxy {
     pub fn new() -> Result<Self, BeError> {
         // This is equivalent to async_io::block_on(zbus::Connection::system())?.
         let connection = zbus::blocking::Connection::system()?;
-        connection.call_method(
-            Some(SERVICE_NAME),
-            BOOT_ENV_PATH,
-            Some("org.freedesktop.DBus.Peer"),
-            "Ping",
-            &(),
-        )?;
-        Ok(Self { connection })
+        // Look up the ActiveRoot property, which is an indirect way to check if
+        // the service is available and we're likely to need anyway.
+        let result = connection
+            .call_method(
+                Some(SERVICE_NAME),
+                BOOT_ENV_PATH,
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(MANAGER_INTERFACE, "ActiveRoot"),
+            )?
+            .body();
+        let active_root = match result.deserialize()? {
+            zvariant::Value::Str(root) => Some(Root::from_str(&root)?),
+            _ => None,
+        };
+        Ok(Self {
+            connection,
+            active_root,
+        })
     }
 }
 
@@ -245,7 +257,11 @@ impl Client for ClientProxy {
         Ok(())
     }
 
-    fn get_boot_environments(&self, _root: Option<&Root>) -> Result<Vec<BootEnvironment>, BeError> {
+    fn get_boot_environments(&self, root: Option<&Root>) -> Result<Vec<BootEnvironment>, BeError> {
+        let root = match root.or(self.active_root.as_ref()) {
+            Some(root) => root,
+            None => return Err(BeError::NoActiveBootEnvironment),
+        };
         let body = self
             .connection
             .call_method(
@@ -260,11 +276,12 @@ impl Client for ClientProxy {
         let managed_objects: BTreeMap<ObjectPath, BTreeMap<String, BootEnvironment>> =
             body.deserialize()?;
 
-        // TODO: Filter out results based on root.
         let mut boot_environments = Vec::new();
         for (_path, interfaces) in managed_objects {
             if let Some(be) = interfaces.get(BOOT_ENV_INTERFACE) {
-                boot_environments.push(be.clone());
+                if be.root == *root {
+                    boot_environments.push(be.clone());
+                }
             }
         }
         Ok(boot_environments)
@@ -356,6 +373,10 @@ impl Client for ClientProxy {
             &(target_str, description, beroot),
         )?;
         Ok(())
+    }
+
+    fn active_root(&self) -> Option<&Root> {
+        self.active_root.as_ref()
     }
 }
 
@@ -731,11 +752,14 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
 pub struct BootEnvironmentManager<T> {
     client: Arc<T>,
     guids: Arc<Mutex<HashSet<u64>>>,
+    active_root: Option<Root>,
 }
 
 impl<T: Client> BootEnvironmentManager<T> {
     pub fn new(client: T) -> Self {
         Self {
+            // This is constant per reboot, so compute it from the outset.
+            active_root: client.active_root().cloned(),
             client: Arc::new(client),
             guids: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -1133,6 +1157,15 @@ impl<T: Client + 'static> BootEnvironmentManager<T> {
         self.client.init(pool)?;
         tracing::info!(pool, "Initialized boot environment dataset layout");
         Ok(())
+    }
+
+    /// The active boot environment root.
+    #[zbus(property(emits_changed_signal = "const"))]
+    fn active_root(&self) -> String {
+        self.active_root
+            .as_ref()
+            .map(|root| root.to_string())
+            .unwrap_or_default()
     }
 }
 

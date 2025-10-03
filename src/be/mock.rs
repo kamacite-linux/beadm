@@ -580,6 +580,10 @@ impl Client for EmulatorClient {
             }
         }
     }
+
+    fn active_root(&self) -> Option<&Root> {
+        Some(&self.active_root)
+    }
 }
 
 fn sample_boot_environments() -> Vec<BootEnvironment> {

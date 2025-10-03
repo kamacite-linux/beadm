@@ -271,6 +271,10 @@ impl Root {
         zfs::DatasetName::from_str(&self.path).unwrap()
     }
 
+    pub(crate) fn to_string(&self) -> String {
+        self.path.clone()
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         self.path.as_str()
     }
@@ -375,6 +379,9 @@ pub trait Client: Send + Sync {
     /// Set the description for an existing boot environment or snapshot.
     fn describe(&self, target: &Label, description: &str, root: Option<&Root>)
     -> Result<(), Error>;
+
+    /// Get the active boot environment root, if any.
+    fn active_root(&self) -> Option<&Root>;
 }
 
 /// Generate a snapshot name based on the current time.
