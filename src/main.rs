@@ -777,21 +777,21 @@ fn main() -> Result<()> {
             // is available but don't emit errors if it's not.
             #[cfg(feature = "dbus")]
             if let Ok(client) = ClientProxy::new() {
-                return execute_command(&cli.command, None, client);
+                return execute_command(&cli.command, cli.root.as_ref(), client);
             } else if cli.verbose {
                 println!("D-Bus service not available, falling back to libzfs.");
             }
 
             // Otherwise we fall back to using libzfs.
-            execute_command(&cli.command, None, LibZfsClient::new(cli.root))
+            execute_command(&cli.command, cli.root.as_ref(), LibZfsClient::new())
         }
         #[cfg(feature = "dbus")]
         ClientType::DBus => {
             // When the client type is explicitly "dbus", errors are fatal.
             let client = ClientProxy::new()?;
-            execute_command(&cli.command, None, client)
+            execute_command(&cli.command, cli.root.as_ref(), client)
         }
-        ClientType::LibZfs => execute_command(&cli.command, None, LibZfsClient::new(cli.root)),
+        ClientType::LibZfs => execute_command(&cli.command, cli.root.as_ref(), LibZfsClient::new()),
     }
 }
 
