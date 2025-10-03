@@ -39,20 +39,6 @@ impl LibZfsClient {
         }
     }
 
-    /// Get the filesystem (if any) that will be active on next boot for the
-    /// pool backing the boot environment root.
-    fn get_next_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
-        let zpool = Zpool::open(lzh, &self.get_root()?.pool())?;
-        Ok(zpool.get_bootfs())
-    }
-
-    /// Get the filesystem (if any) that was previously active on next boot for
-    /// the pool backing the boot environment root.
-    fn get_previous_boot(&self, lzh: &LibHandle) -> Result<Option<DatasetName>, Error> {
-        let zpool = Zpool::open(lzh, &self.get_root()?.pool())?;
-        Ok(zpool.get_previous_bootfs())
-    }
-
     fn get_root(&self) -> Result<&DatasetName, Error> {
         self.root.as_ref().ok_or(Error::NoActiveBootEnvironment)
     }
@@ -187,7 +173,8 @@ impl Client for LibZfsClient {
 
         let dataset = match target {
             Label::Name(name) => {
-                let path = self.get_root()?.append(name)?;
+                let zpool = Zpool::open(&lzh, &self.get_root()?.pool())?;
+                let path = root.append(name)?;
                 let dataset = Dataset::boot_environment(&lzh, name, &path)?;
 
                 // Cannot destroy the active, next, or boot once boot environment.
@@ -198,14 +185,14 @@ impl Client for LibZfsClient {
                         });
                     }
                 }
-                if let Some(bootfs) = self.get_next_boot(&lzh)? {
+                if let Some(bootfs) = zpool.get_bootfs() {
                     if path == bootfs {
                         return Err(Error::CannotDestroyActive {
                             name: name.to_string(),
                         });
                     }
                 }
-                if let Some(bootfs) = self.get_previous_boot(&lzh)? {
+                if let Some(bootfs) = zpool.get_previous_bootfs() {
                     if path == bootfs {
                         return Err(Error::CannotDestroyActive {
                             name: name.to_string(),
@@ -434,8 +421,9 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let root_dataset = Dataset::filesystem(&lzh, root)?;
         let rootfs = get_rootfs()?;
-        let bootfs = self.get_next_boot(&lzh)?;
-        let previous_bootfs = self.get_previous_boot(&lzh)?;
+        let zpool = Zpool::open(&lzh, &self.get_root()?.pool())?;
+        let bootfs = zpool.get_bootfs();
+        let previous_bootfs = zpool.get_previous_bootfs();
         let mut bes = Vec::new();
         root_dataset.iter_children(&lzh, |dataset| {
             let path = match dataset.get_name() {
