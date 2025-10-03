@@ -31,7 +31,7 @@ pub fn execute_apt_hook<T: Client>(client: &T) -> Result<()> {
                 eprint!("Backing up system prior to changes... ");
 
                 let snapshot = client
-                    .snapshot(None, Some(&description))
+                    .snapshot(None, Some(&description), None)
                     .context("Failed to create boot environment snapshot")?;
 
                 eprintln!("done. name={:?} desc={:?}", snapshot, description);
@@ -67,7 +67,7 @@ pub fn execute_apt_hook<T: Client>(client: &T) -> Result<()> {
 /// this APT hook.
 fn find_newest_apt_snapshot<T: Client>(client: &T) -> Result<Option<String>> {
     let boot_envs = client
-        .get_boot_environments()
+        .get_boot_environments(None)
         .context("Failed to determine active boot environment")?;
 
     let active_be = boot_envs.iter().find(|be| be.active);
@@ -77,7 +77,7 @@ fn find_newest_apt_snapshot<T: Client>(client: &T) -> Result<Option<String>> {
     };
 
     let snapshots = client
-        .get_snapshots(&active_be.name)
+        .get_snapshots(&active_be.name, None)
         .context("Failed to list snapshots for the active boot environment")?;
 
     // Find the newest snapshot with "before apt" in the description.
