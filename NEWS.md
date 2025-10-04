@@ -1,4 +1,4 @@
-# beadm (development version)
+# beadm v0.2.0
 
 * When compiled with D-Bus support, all non-`daemon` subcommands now attempt to
   communicate over D-Bus before falling back to `libzfs`. Pass `--client=libzfs`
@@ -10,6 +10,9 @@
 
 * `beadm mount` will now create mountpoints in `/run/be` rather than `/tmp` when
   no mountpoint is supplied by the user.
+
+* Most D-Bus methods now take a `beroot` parameter, matching the behaviour of
+  `beadm` itself.
 
 # beadm v0.1.0
 
