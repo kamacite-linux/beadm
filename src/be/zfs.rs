@@ -945,15 +945,6 @@ impl Dataset {
         Ok(())
     }
 
-    /// Get the parent dataset.
-    pub fn parent(&self, lzh: &LibHandle) -> Option<Dataset> {
-        if let Some(Some(name)) = self.get_name().map(|name| name.parent()) {
-            Dataset::filesystem(lzh, &name).ok()
-        } else {
-            None
-        }
-    }
-
     /// Get the canmount property of this dataset.
     pub fn get_canmount(&self) -> Option<String> {
         self.get_property(ffi::ZFS_PROP_CANMOUNT)
