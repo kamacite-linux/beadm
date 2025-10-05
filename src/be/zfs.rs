@@ -655,7 +655,7 @@ impl Client for LibZfsClient {
 
 /// Safe wrapper for various operations on a ZFS dataset handle.
 struct Dataset {
-    handle: *mut ffi::ZfsHandle,
+    handle: ptr::NonNull<ffi::ZfsHandle>,
     owns_handle: bool,
 }
 
@@ -667,7 +667,7 @@ impl Dataset {
             return Err(lzh.libzfs_error().into());
         }
         Ok(Dataset {
-            handle,
+            handle: unsafe { ptr::NonNull::new_unchecked(handle) },
             owns_handle: true,
         })
     }
@@ -706,7 +706,7 @@ impl Dataset {
     /// responsibility of the caller.
     pub fn borrowed(handle: *mut ffi::ZfsHandle) -> Self {
         Dataset {
-            handle,
+            handle: unsafe { ptr::NonNull::new_unchecked(handle) },
             owns_handle: false,
         }
     }
@@ -750,7 +750,7 @@ impl Dataset {
 
     /// Get the dataset name.
     pub fn get_name(&self) -> Option<DatasetName> {
-        let name_ptr = unsafe { ffi::zfs_get_name(self.handle) };
+        let name_ptr = unsafe { ffi::zfs_get_name(self.handle.as_ptr()) };
         if name_ptr.is_null() {
             // The libzfs API claims this is not possible.
             return None;
@@ -764,7 +764,7 @@ impl Dataset {
         let mut mountpoint_ptr: *mut std::os::raw::c_char = ptr::null_mut();
         let result = unsafe {
             ffi::zfs_is_mounted(
-                self.handle,
+                self.handle.as_ptr(),
                 &mut mountpoint_ptr as *mut *mut std::os::raw::c_char,
             )
         };
@@ -800,7 +800,7 @@ impl Dataset {
         new_name: &DatasetName,
         flags: ffi::RenameFlags,
     ) -> Result<(), Error> {
-        let result = unsafe { ffi::zfs_rename(self.handle, new_name.as_ptr(), flags) };
+        let result = unsafe { ffi::zfs_rename(self.handle.as_ptr(), new_name.as_ptr(), flags) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -809,7 +809,7 @@ impl Dataset {
 
     /// Destroy this dataset.
     pub fn destroy(&self, lzh: &LibHandle) -> Result<(), Error> {
-        let result = unsafe { ffi::zfs_destroy(self.handle, 0) };
+        let result = unsafe { ffi::zfs_destroy(self.handle.as_ptr(), 0) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -819,7 +819,7 @@ impl Dataset {
     /// Unmount this dataset with optional force flag.
     pub fn unmount(&self, lzh: &LibHandle, force: bool) -> Result<(), Error> {
         let flags = if force { 1 } else { 0 };
-        let result = unsafe { ffi::zfs_unmount(self.handle, ptr::null(), flags) };
+        let result = unsafe { ffi::zfs_unmount(self.handle.as_ptr(), ptr::null(), flags) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -831,8 +831,9 @@ impl Dataset {
         let c_mountpoint = CString::new(mountpoint.as_bytes()).map_err(|_| Error::InvalidPath {
             path: mountpoint.display().to_string(),
         })?;
-        let result =
-            unsafe { ffi::zfs_mount_at(self.handle, ptr::null(), 0, c_mountpoint.as_ptr()) };
+        let result = unsafe {
+            ffi::zfs_mount_at(self.handle.as_ptr(), ptr::null(), 0, c_mountpoint.as_ptr())
+        };
         if result != 0 {
             // TODO: zfs_mount_at() sets regular ELOOP, ENOENT, ENOTDIR, EPERM,
             // EBUSY via errno. We should convert these to the relevant errors
@@ -844,7 +845,8 @@ impl Dataset {
 
     /// Rollback this dataset to the specified snapshot.
     pub fn rollback_to(&self, lzh: &LibHandle, snapshot: &Dataset) -> Result<(), Error> {
-        let result = unsafe { ffi::zfs_rollback(self.handle, snapshot.handle, 0) };
+        let result =
+            unsafe { ffi::zfs_rollback(self.handle.as_ptr(), snapshot.handle.as_ptr(), 0) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -853,7 +855,7 @@ impl Dataset {
 
     /// Promote this clone to be independent of its origin snapshot.
     pub fn promote(&self, lzh: &LibHandle) -> Result<(), Error> {
-        let result = unsafe { ffi::zfs_promote(self.handle) };
+        let result = unsafe { ffi::zfs_promote(self.handle.as_ptr()) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -868,7 +870,7 @@ impl Dataset {
         let mut data = IterData::from(callback);
         let result = unsafe {
             ffi::zfs_iter_snapshots(
-                self.handle,
+                self.handle.as_ptr(),
                 0, // simple = false for recursive iteration
                 iter_callback::<F>,
                 data.as_mut_ptr(),
@@ -896,8 +898,9 @@ impl Dataset {
         F: FnMut(&Dataset) -> Result<(), Error>,
     {
         let mut data = IterData::from(callback);
-        let result =
-            unsafe { ffi::zfs_iter_children(self.handle, iter_callback::<F>, data.as_mut_ptr()) };
+        let result = unsafe {
+            ffi::zfs_iter_children(self.handle.as_ptr(), iter_callback::<F>, data.as_mut_ptr())
+        };
 
         // Check if the callback set an error.
         if let Some(error) = data.error {
@@ -925,7 +928,7 @@ impl Dataset {
         let mut data = IterData::from(callback);
         let result = unsafe {
             ffi::zfs_iter_dependents(
-                self.handle,
+                self.handle.as_ptr(),
                 if allow_recursion { 1 } else { 0 },
                 iter_callback::<F>,
                 data.as_mut_ptr(),
@@ -961,7 +964,7 @@ impl Dataset {
         let mut buf = vec![0u8; PROP_BUF_SIZE];
         let result = unsafe {
             ffi::zfs_prop_get(
-                self.handle,
+                self.handle.as_ptr(),
                 prop,
                 buf.as_mut_ptr() as *mut std::os::raw::c_char,
                 PROP_BUF_SIZE,
@@ -984,7 +987,7 @@ impl Dataset {
         let mut value: u64 = 0;
         let result = unsafe {
             ffi::zfs_prop_get_numeric(
-                self.handle,
+                self.handle.as_ptr(),
                 prop,
                 &mut value as *mut u64,
                 ptr::null_mut(),
@@ -1002,7 +1005,7 @@ impl Dataset {
             Err(_) => return None,
         };
 
-        let user_props = unsafe { ffi::zfs_get_user_props(self.handle) };
+        let user_props = unsafe { ffi::zfs_get_user_props(self.handle.as_ptr()) };
         if user_props.is_null() {
             // This should never happen.
             return None;
@@ -1054,8 +1057,13 @@ impl Dataset {
         let prop_cstr =
             CString::new(prop_name).map_err(|_| Error::invalid_prop(prop_name, value))?;
         let value_cstr = CString::new(value).map_err(|_| Error::invalid_prop(prop_name, value))?;
-        let result =
-            unsafe { ffi::zfs_prop_set(self.handle, prop_cstr.as_ptr(), value_cstr.as_ptr()) };
+        let result = unsafe {
+            ffi::zfs_prop_set(
+                self.handle.as_ptr(),
+                prop_cstr.as_ptr(),
+                value_cstr.as_ptr(),
+            )
+        };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -1070,7 +1078,7 @@ impl Dataset {
         properties: Option<&NvList>,
     ) -> Result<(), Error> {
         let props_ptr = properties.map_or(ptr::null_mut(), |p| p.as_nvlist_ptr());
-        let result = unsafe { ffi::zfs_clone(self.handle, name.as_ptr(), props_ptr) };
+        let result = unsafe { ffi::zfs_clone(self.handle.as_ptr(), name.as_ptr(), props_ptr) };
         if result != 0 {
             return Err(lzh.libzfs_error().into());
         }
@@ -1080,11 +1088,11 @@ impl Dataset {
 
 impl Drop for Dataset {
     fn drop(&mut self) {
-        if !self.owns_handle || self.handle.is_null() {
+        if !self.owns_handle {
             return;
         }
         unsafe {
-            ffi::zfs_close(self.handle);
+            ffi::zfs_close(self.handle.as_ptr());
         }
     }
 }
@@ -1136,7 +1144,7 @@ where
 
 /// Safe wrapper for zpool operations.
 struct Zpool {
-    handle: *mut ffi::ZpoolHandle,
+    handle: ptr::NonNull<ffi::ZpoolHandle>,
 }
 
 impl Zpool {
@@ -1146,7 +1154,9 @@ impl Zpool {
         if handle.is_null() {
             return Err(lzh.libzfs_error().into());
         }
-        Ok(Zpool { handle })
+        Ok(Zpool {
+            handle: unsafe { ptr::NonNull::new_unchecked(handle) },
+        })
     }
 
     /// Get a zpool property.
@@ -1155,7 +1165,7 @@ impl Zpool {
         let mut buf = vec![0u8; PROP_BUF_SIZE];
         let result = unsafe {
             ffi::zpool_get_prop(
-                self.handle,
+                self.handle.as_ptr(),
                 prop,
                 buf.as_mut_ptr() as *mut std::os::raw::c_char,
                 PROP_BUF_SIZE,
@@ -1184,7 +1194,8 @@ impl Zpool {
     /// Set the bootfs property (which dataset boots by default).
     pub fn set_bootfs(&self, lzh: &LibHandle, dataset: &DatasetName) -> Result<(), Error> {
         let prop = CString::new("bootfs").unwrap();
-        let result = unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), dataset.as_ptr()) };
+        let result =
+            unsafe { ffi::zpool_set_prop(self.handle.as_ptr(), prop.as_ptr(), dataset.as_ptr()) };
         if result != 0 {
             Err(lzh.libzfs_error().into())
         } else {
@@ -1199,7 +1210,7 @@ impl Zpool {
         let mut buf = vec![0u8; PROP_BUF_SIZE];
         let result = unsafe {
             ffi::zpool_get_userprop(
-                self.handle,
+                self.handle.as_ptr(),
                 prop.as_ptr(),
                 buf.as_mut_ptr() as *mut std::os::raw::c_char,
                 PROP_BUF_SIZE,
@@ -1227,7 +1238,8 @@ impl Zpool {
     /// Set the "previous bootfs" property (used for temporary activation).
     pub fn set_previous_bootfs(&self, lzh: &LibHandle, dataset: &DatasetName) -> Result<(), Error> {
         let prop = CString::new(PREVIOUS_BOOTFS_PROP).unwrap();
-        let result = unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), dataset.as_ptr()) };
+        let result =
+            unsafe { ffi::zpool_set_prop(self.handle.as_ptr(), prop.as_ptr(), dataset.as_ptr()) };
         if result != 0 {
             Err(lzh.libzfs_error().into())
         } else {
@@ -1239,8 +1251,9 @@ impl Zpool {
     pub fn clear_previous_bootfs(&self, lzh: &LibHandle) -> Result<(), Error> {
         let prop = CString::new(PREVIOUS_BOOTFS_PROP).unwrap();
         let empty_value = CString::new("").unwrap();
-        let result =
-            unsafe { ffi::zpool_set_prop(self.handle, prop.as_ptr(), empty_value.as_ptr()) };
+        let result = unsafe {
+            ffi::zpool_set_prop(self.handle.as_ptr(), prop.as_ptr(), empty_value.as_ptr())
+        };
         if result != 0 {
             Err(lzh.libzfs_error().into())
         } else {
@@ -1251,10 +1264,8 @@ impl Zpool {
 
 impl Drop for Zpool {
     fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe {
-                ffi::zpool_close(self.handle);
-            }
+        unsafe {
+            ffi::zpool_close(self.handle.as_ptr());
         }
     }
 }
@@ -1452,7 +1463,7 @@ impl std::error::Error for LibzfsError {}
 
 /// Wraps an nvlist to manage its lifetime.
 struct NvList {
-    nvl: *mut ffi::NvList,
+    nvl: ptr::NonNull<ffi::NvList>,
 }
 
 impl NvList {
@@ -1467,7 +1478,9 @@ impl NvList {
             let err: std::io::Error = std::io::ErrorKind::OutOfMemory.into();
             return Err(err.into());
         }
-        Ok(NvList { nvl })
+        Ok(NvList {
+            nvl: unsafe { ptr::NonNull::new_unchecked(nvl) },
+        })
     }
 
     pub fn from(pairs: &[(&str, &str)]) -> Result<Self, Error> {
@@ -1481,8 +1494,9 @@ impl NvList {
     pub fn add_string(&mut self, name: &str, value: &str) -> Result<(), Error> {
         let name_cstr = CString::new(name).map_err(|_| Error::invalid_prop(name, value))?;
         let value_cstr = CString::new(value).map_err(|_| Error::invalid_prop(name, value))?;
-        let result =
-            unsafe { ffi::nvlist_add_string(self.nvl, name_cstr.as_ptr(), value_cstr.as_ptr()) };
+        let result = unsafe {
+            ffi::nvlist_add_string(self.nvl.as_ptr(), name_cstr.as_ptr(), value_cstr.as_ptr())
+        };
         if result != 0 {
             return Err(std::io::Error::from_raw_os_error(result).into());
         }
@@ -1490,17 +1504,17 @@ impl NvList {
     }
 
     fn as_ptr(&self) -> *mut c_void {
-        self.nvl as *mut c_void
+        self.nvl.as_ptr() as *mut c_void
     }
 
     pub fn as_nvlist_ptr(&self) -> *mut ffi::NvList {
-        self.nvl
+        self.nvl.as_ptr()
     }
 }
 
 impl Drop for NvList {
     fn drop(&mut self) {
-        unsafe { ffi::nvlist_free(self.nvl) };
+        unsafe { ffi::nvlist_free(self.nvl.as_ptr()) };
     }
 }
 
