@@ -653,11 +653,13 @@ impl Client for LibZfsClient {
     }
 }
 
-/// Safe wrapper for various operations on a ZFS dataset handle.
+/// Safe wrapper for various operations on an owned ZFS dataset handle.
 struct Dataset {
     handle: ptr::NonNull<ffi::ZfsHandle>,
-    owns_handle: bool,
 }
+
+/// An unowned variant of [`Dataset`].
+type UnownedDataset = std::mem::ManuallyDrop<Dataset>;
 
 impl Dataset {
     /// Open a ZFS dataset with the given name and type.
@@ -668,7 +670,6 @@ impl Dataset {
         }
         Ok(Dataset {
             handle: unsafe { ptr::NonNull::new_unchecked(handle) },
-            owns_handle: true,
         })
     }
 
@@ -702,13 +703,18 @@ impl Dataset {
         })
     }
 
-    /// Create a Dataset from an existing handle. Closing the handle is the
-    /// responsibility of the caller.
-    pub fn borrowed(handle: *mut ffi::ZfsHandle) -> Self {
-        Dataset {
-            handle: unsafe { ptr::NonNull::new_unchecked(handle) },
-            owns_handle: false,
-        }
+    /// Create a Dataset from an existing handle with an externally-managed
+    /// lifetime. The resulting [`UnownedDataset`] will not be automatically
+    /// closed when dropped.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must be non-null.
+    pub unsafe fn from_ptr(ptr: *mut ffi::ZfsHandle) -> UnownedDataset {
+        let dataset = Dataset {
+            handle: unsafe { ptr::NonNull::new_unchecked(ptr) },
+        };
+        std::mem::ManuallyDrop::new(dataset)
     }
 
     /// Create a new ZFS filesystem.
@@ -1088,9 +1094,6 @@ impl Dataset {
 
 impl Drop for Dataset {
     fn drop(&mut self) {
-        if !self.owns_handle {
-            return;
-        }
         unsafe {
             ffi::zfs_close(self.handle.as_ptr());
         }
@@ -1130,8 +1133,11 @@ extern "C" fn iter_callback<F>(
 where
     F: FnMut(&Dataset) -> Result<(), Error>,
 {
+    if data.is_null() || zhp.is_null() {
+        return 1;
+    }
     let iter_data = unsafe { &mut *(data as *mut IterData<F>) };
-    let dataset = Dataset::borrowed(zhp);
+    let dataset = unsafe { Dataset::from_ptr(zhp) };
 
     match (iter_data.callback)(&dataset) {
         Ok(()) => 0, // Continue iteration
