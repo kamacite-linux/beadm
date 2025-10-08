@@ -81,19 +81,13 @@ impl Client for ClientProxy {
         let src = source.map(|label| label.to_string()).unwrap_or_default();
         let props: Vec<String> = properties.to_vec();
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
-
-        let _result: String = self
-            .connection
-            .call_method(
-                Some(SERVICE_NAME),
-                BOOT_ENV_PATH,
-                Some(MANAGER_INTERFACE),
-                "Create",
-                &(be_name, desc, src, props, beroot),
-            )?
-            .body()
-            .deserialize()?;
-
+        self.connection.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "Create",
+            &(be_name, desc, src, props, beroot),
+        )?;
         Ok(())
     }
 
@@ -109,19 +103,13 @@ impl Client for ClientProxy {
         let hid = host_id.unwrap_or("");
         let props: Vec<String> = properties.to_vec();
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
-
-        let _result: String = self
-            .connection
-            .call_method(
-                Some(SERVICE_NAME),
-                BOOT_ENV_PATH,
-                Some(MANAGER_INTERFACE),
-                "CreateEmpty",
-                &(be_name, desc, hid, props, beroot),
-            )?
-            .body()
-            .deserialize()?;
-
+        self.connection.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "CreateEmpty",
+            &(be_name, desc, hid, props, beroot),
+        )?;
         Ok(())
     }
 
@@ -165,8 +153,7 @@ impl Client for ClientProxy {
             MountMode::ReadWrite => false,
         };
         let mountpoint = mountpoint.map_or("".to_string(), |mp| mp.to_string_lossy().to_string());
-        let result: PathBuf = self
-            .connection
+        self.connection
             .call_method(
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
@@ -175,8 +162,8 @@ impl Client for ClientProxy {
                 &(be_name, mountpoint, read_only, beroot),
             )?
             .body()
-            .deserialize()?;
-        Ok(result)
+            .deserialize()
+            .map_err(From::from)
     }
 
     fn unmount(
@@ -329,8 +316,7 @@ impl Client for ClientProxy {
         let src = source.map(|label| label.to_string()).unwrap_or_default();
         let desc = description.unwrap_or("");
         let beroot = root.map(|r| r.as_str()).unwrap_or_default();
-        let result: String = self
-            .connection
+        self.connection
             .call_method(
                 Some(SERVICE_NAME),
                 BOOT_ENV_PATH,
@@ -339,22 +325,18 @@ impl Client for ClientProxy {
                 &(src, desc, beroot),
             )?
             .body()
-            .deserialize()?;
-        Ok(result)
+            .deserialize()
+            .map_err(From::from)
     }
 
     fn init(&self, pool: &str) -> Result<(), Error> {
-        let _result: () = self
-            .connection
-            .call_method(
-                Some(SERVICE_NAME),
-                BOOT_ENV_PATH,
-                Some(MANAGER_INTERFACE),
-                "Init",
-                &(pool,),
-            )?
-            .body()
-            .deserialize()?;
+        self.connection.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "Init",
+            &(pool,),
+        )?;
         Ok(())
     }
 
