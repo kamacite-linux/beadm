@@ -73,18 +73,25 @@ impl From<Error> for zbus::fdo::Error {
     fn from(err: Error) -> Self {
         match err {
             Error::NotFound { .. } => zbus::fdo::Error::UnknownObject(err.to_string()),
+            Error::Conflict { .. } => zbus::fdo::Error::ObjectPathInUse(err.to_string()),
+            Error::MountPointInUse { .. } => zbus::fdo::Error::NotSupported(err.to_string()),
+            Error::CannotDestroyActive { .. } => zbus::fdo::Error::NotSupported(err.to_string()),
+            Error::HasSnapshots { .. } => zbus::fdo::Error::NotSupported(err.to_string()),
             Error::InvalidName { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
             Error::InvalidPath { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
+            Error::Mounted { .. } => zbus::fdo::Error::NotSupported(err.to_string()),
+            Error::NotMounted { .. } => zbus::fdo::Error::NotSupported(err.to_string()),
             Error::InvalidProp { .. } => zbus::fdo::Error::InvalidArgs(err.to_string()),
             Error::NoActiveBootEnvironment => zbus::fdo::Error::Failed(err.to_string()),
             Error::InvalidBootEnvironmentRoot { .. } => {
                 zbus::fdo::Error::InvalidArgs(err.to_string())
             }
-            Error::ZbusError(ref e) => match e {
-                zbus::Error::FDO(fdo_err) => *fdo_err.clone(),
-                _ => zbus::fdo::Error::Failed(err.to_string()),
-            },
-            _ => zbus::fdo::Error::Failed(err.to_string()),
+            Error::Io(err) => {
+                let e: zbus::Error = From::from(err);
+                e.into()
+            }
+            Error::LibzfsError(_) => zbus::fdo::Error::Failed(err.to_string()),
+            Error::ZbusError(e) => e.into(),
         }
     }
 }
@@ -92,7 +99,10 @@ impl From<Error> for zbus::fdo::Error {
 #[cfg(feature = "dbus")]
 impl From<Error> for zbus::Error {
     fn from(err: Error) -> Self {
-        zbus::Error::Failure(err.to_string())
+        match err {
+            Error::ZbusError(inner) => inner,
+            err => From::from(err),
+        }
     }
 }
 
