@@ -397,7 +397,6 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
             mountpoint: bool,
             next_boot: bool,
             boot_once: bool,
-            space: bool,
         }
         let changed = self
             .data
@@ -409,7 +408,6 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
                 mountpoint: stored.mountpoint != current.mountpoint,
                 next_boot: stored.next_boot != current.next_boot,
                 boot_once: stored.boot_once != current.boot_once,
-                space: stored.space != current.space,
             })
             .expect("Failed to acquire read lock");
 
@@ -418,8 +416,7 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
             || changed.description
             || changed.mountpoint
             || changed.next_boot
-            || changed.boot_once
-            || changed.space)
+            || changed.boot_once)
         {
             return Ok(());
         }
@@ -447,9 +444,6 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         }
         if changed.boot_once {
             self.boot_once_changed(signal_emitter).await?;
-        }
-        if changed.space {
-            self.space_changed(signal_emitter).await?;
         }
 
         Ok(())
@@ -518,7 +512,7 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
     }
 
     /// Bytes on the filesystem associated with this boot environment.
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn space(&self) -> u64 {
         self.data.read().unwrap().space
     }

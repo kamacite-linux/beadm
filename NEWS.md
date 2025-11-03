@@ -2,6 +2,9 @@
 
 * D-Bus errors are now more informative.
 
+* `beadm daemon` will no longer emit changed signals for the Space property on
+  boot environment objects, which were causing unnecessary message traffic.
+
 # beadm v0.2.0
 
 * When compiled with D-Bus support, all non-`daemon` subcommands now attempt to
