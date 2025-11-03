@@ -1,4 +1,4 @@
-# beadm (development version)
+# beadm v0.2.1
 
 * D-Bus errors are now more informative.
 
