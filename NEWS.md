@@ -5,6 +5,10 @@
 * `beadm daemon` will no longer emit changed signals for the Space property on
   boot environment objects, which were causing unnecessary message traffic.
 
+* Methods called on individual boot environment objects (as opposed to the
+  manager) will now flush the cache, emitting signals for any changed properties
+  immediately and yielding correct `beadm list` output.
+
 # beadm v0.2.0
 
 * When compiled with D-Bus support, all non-`daemon` subcommands now attempt to

@@ -448,6 +448,20 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
 
         Ok(())
     }
+
+    /// Instruct the boot environment manager to flush its cached boot
+    /// environments.
+    async fn refresh(&self, conn: &zbus::Connection) -> Result<(), zbus::fdo::Error> {
+        conn.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "Refresh",
+            &(),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[interface(name = "ca.kamacite.BootEnvironment")]
@@ -531,11 +545,13 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        self.client
-            .activate(&data.name, temporary, Some(&data.root))?;
-        tracing::info!(name = data.name, temporary, "Activated boot environment");
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            self.client
+                .activate(&data.name, temporary, Some(&data.root))?;
+            tracing::info!(name = data.name, temporary, "Activated boot environment");
+        }
+        self.refresh(conn).await
     }
 
     /// Destroy this boot environment.
@@ -547,20 +563,22 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        self.client.destroy(
-            &Label::Name(data.name.clone()),
-            force_unmount,
-            snapshots,
-            Some(&data.root),
-        )?;
-        tracing::info!(
-            name = data.name,
-            force_unmount,
-            snapshots,
-            "Destroyed boot environment"
-        );
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            self.client.destroy(
+                &Label::Name(data.name.clone()),
+                force_unmount,
+                snapshots,
+                Some(&data.root),
+            )?;
+            tracing::info!(
+                name = data.name,
+                force_unmount,
+                snapshots,
+                "Destroyed boot environment"
+            );
+        }
+        self.refresh(conn).await
     }
 
     /// Destroy a snapshot of this boot environment.
@@ -571,16 +589,23 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        let label = Label::Snapshot(data.name.clone(), snapshot.to_string());
-        self.client
-            .destroy(&label, false, false, Some(&data.root))?;
-        tracing::info!(snapshot = label.to_string(), "Destroyed snapshot");
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            let label = Label::Snapshot(data.name.clone(), snapshot.to_string());
+            self.client
+                .destroy(&label, false, false, Some(&data.root))?;
+            tracing::info!(snapshot = label.to_string(), "Destroyed snapshot");
+        }
+        self.refresh(conn).await
     }
 
     /// Mount this boot environment.
-    fn mount(&self, mountpoint: &str, read_only: bool) -> zbus::fdo::Result<()> {
+    async fn mount(
+        &self,
+        mountpoint: &str,
+        read_only: bool,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
         let mode = if read_only {
             MountMode::ReadOnly
         } else {
@@ -591,31 +616,41 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         } else {
             Some(PathBuf::from(mountpoint))
         };
-        let data = self.data.read().unwrap();
-        let result = self.client.mount(
-            &data.name,
-            mountpoint.as_ref().map(|mp| mp.as_path()),
-            mode,
-            Some(&data.root),
-        )?;
-        tracing::info!(
-            name = data.name,
-            mountpoint = result.display().to_string(),
-            read_only,
-            "Mounted boot environment"
-        );
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            let result = self.client.mount(
+                &data.name,
+                mountpoint.as_ref().map(|mp| mp.as_path()),
+                mode,
+                Some(&data.root),
+            )?;
+            tracing::info!(
+                name = data.name,
+                mountpoint = result.display().to_string(),
+                read_only,
+                "Mounted boot environment"
+            );
+        }
+        self.refresh(conn).await
     }
 
     /// Unmount this boot environment.
     #[zbus(out_args("mountpoint"))]
-    fn unmount(&self, force: bool) -> zbus::fdo::Result<String> {
-        let data = self.data.read().unwrap();
-        let mountpoint = self
-            .client
-            .unmount(&data.name, force, Some(&data.root))?
-            .map(|p| p.display().to_string());
-        tracing::info!(name = data.name, mountpoint, "Unmounted boot environment");
+    async fn unmount(
+        &self,
+        force: bool,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<String> {
+        let mountpoint = {
+            let data = self.data.read().unwrap();
+            let mountpoint = self
+                .client
+                .unmount(&data.name, force, Some(&data.root))?
+                .map(|p| p.display().to_string());
+            tracing::info!(name = data.name, mountpoint, "Unmounted boot environment");
+            mountpoint
+        };
+        self.refresh(conn).await?;
         Ok(mountpoint.unwrap_or_default())
     }
 
@@ -627,10 +662,12 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        self.client.rename(&data.name, new_name, Some(&data.root))?;
-        tracing::info!(name = data.name, new_name, "Renamed boot environment");
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            self.client.rename(&data.name, new_name, Some(&data.root))?;
+            tracing::info!(name = data.name, new_name, "Renamed boot environment");
+        }
+        self.refresh(conn).await
     }
 
     /// Roll this boot environment back to a snapshot.
@@ -641,15 +678,17 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        self.client
-            .rollback(&data.name, snapshot, Some(&data.root))?;
-        tracing::info!(
-            name = data.name,
-            snapshot,
-            "Rolled boot environment back to snapshot"
-        );
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            self.client
+                .rollback(&data.name, snapshot, Some(&data.root))?;
+            tracing::info!(
+                name = data.name,
+                snapshot,
+                "Rolled boot environment back to snapshot"
+            );
+        }
+        self.refresh(conn).await
     }
 
     /// Get snapshots for this boot environment.
@@ -689,19 +728,23 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<String> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        let label = if snapshot_name.is_empty() {
-            Label::Name(data.name.clone())
-        } else {
-            Label::Snapshot(data.name.clone(), snapshot_name.to_string())
+        let snapshot = {
+            let data = self.data.read().unwrap();
+            let label = if snapshot_name.is_empty() {
+                Label::Name(data.name.clone())
+            } else {
+                Label::Snapshot(data.name.clone(), snapshot_name.to_string())
+            };
+            let desc = if !description.is_empty() {
+                Some(description)
+            } else {
+                None
+            };
+            let snapshot = self.client.snapshot(Some(&label), desc, Some(&data.root))?;
+            tracing::info!(snapshot, "Created snapshot");
+            snapshot
         };
-        let desc = if !description.is_empty() {
-            Some(description)
-        } else {
-            None
-        };
-        let snapshot = self.client.snapshot(Some(&label), desc, Some(&data.root))?;
-        tracing::info!(snapshot, "Created snapshot");
+        self.refresh(conn).await?;
         Ok(snapshot)
     }
 
@@ -713,14 +756,16 @@ impl<T: Client + 'static> BootEnvironmentObject<T> {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
-        let data = self.data.read().unwrap();
-        self.client.describe(
-            &Label::Name(data.name.clone()),
-            description,
-            Some(&data.root),
-        )?;
-        tracing::info!(name = data.name, description, "Set description");
-        Ok(())
+        {
+            let data = self.data.read().unwrap();
+            self.client.describe(
+                &Label::Name(data.name.clone()),
+                description,
+                Some(&data.root),
+            )?;
+            tracing::info!(name = data.name, description, "Set description");
+        }
+        self.refresh(conn).await
     }
 }
 
