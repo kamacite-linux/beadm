@@ -366,7 +366,7 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let dataset = Dataset::boot_environment(&lzh, be_name, &be_path)?;
         if let Some(mountpoint) = dataset.get_mountpoint() {
-            Ok(read_hostid(&mountpoint.join("etc/hostid")))
+            read_hostid(Some(mountpoint)).map_err(From::from)
         } else {
             Err(Error::not_mounted(be_name))
         }
@@ -1543,22 +1543,36 @@ pub fn format_zfs_bytes(bytes: u64) -> String {
     String::from_utf8(buf).unwrap_or("-".to_string())
 }
 
-/// Read a host ID, usually from `/etc/hostid`.
-pub fn read_hostid(path: &Path) -> Option<u32> {
-    let hostid_bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return None,
+/// Read a host ID, from `/sys/module/spl/parameters/spl_hostid` if possible
+/// (i.e. when on Linux with the ZFS module loaded) or `/etc/hostid` otherwise.
+/// `root_dir` can be used to point to a specific root filesystem and disable
+/// the kernel module parameter check.
+pub fn read_hostid<P: AsRef<Path>>(root_dir: Option<P>) -> Result<Option<u32>, std::io::Error> {
+    // Prefer the kernel module parameter for the live system, which will
+    // supercede whatever is in /etc/hostid.
+    if root_dir.is_none() {
+        if let Ok(hostid) = std::fs::read_to_string("/sys/module/spl/parameters/spl_hostid") {
+            // Ideally we'd return std::num::ParseIntError, but it's
+            // non-constructable.
+            return u32::from_str_radix(hostid.trim(), 10)
+                .map(Some)
+                .map_err(|e| std::io::Error::other(e));
+        }
     };
-    if hostid_bytes.len() != 4 {
-        return None;
-    }
-    let hostid = u32::from_le_bytes([
-        hostid_bytes[0],
-        hostid_bytes[1],
-        hostid_bytes[2],
-        hostid_bytes[3],
-    ]);
-    Some(hostid)
+    let path = match root_dir {
+        Some(dir) => dir.as_ref().join("etc/hostid"),
+        None => PathBuf::from("/etc/hostid"),
+    };
+    let hostid = match std::fs::read(path) {
+        Ok(bytes) => {
+            if bytes.len() != 4 {
+                return Err(std::io::Error::other("incorrect byte count"));
+            }
+            Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        }
+        Err(_) => None,
+    };
+    Ok(hostid)
 }
 
 /// Get the root ZFS filesystem, if any, from `/proc/mounts`.
@@ -1719,28 +1733,42 @@ mod tests {
 
     #[test]
     fn test_read_hostid() {
-        use std::io::Write;
-
         let cases = [
-            (vec![0x0c, 0xb1, 0xba, 0x00], Some("0x00bab10c".to_string())), // ZFSBootMenu
-            (vec![0x00, 0x00, 0x00, 0x00], Some("0x00000000".to_string())),
-            (vec![0xff, 0xff, 0xff, 0xff], Some("0xffffffff".to_string())),
-            (vec![0xef, 0xbe, 0xad, 0xde], Some("0xdeadbeef".to_string())), // zgenhostid(8)
-            (vec![0x01, 0x02, 0x03], None),
-            (vec![0x01, 0x02, 0x03, 0x04, 0x05], None),
-            (vec![], None),
+            (vec![0x0c, 0xb1, 0xba, 0x00], "0x00bab10c".to_string()), // ZFSBootMenu
+            (vec![0x00, 0x00, 0x00, 0x00], "0x00000000".to_string()),
+            (vec![0xff, 0xff, 0xff, 0xff], "0xffffffff".to_string()),
+            (vec![0xef, 0xbe, 0xad, 0xde], "0xdeadbeef".to_string()), // zgenhostid(8)
         ];
 
         for (bytes, expected) in cases {
-            let mut temp_file = tempfile::NamedTempFile::new().unwrap();
-            temp_file.write_all(&bytes).unwrap();
-            temp_file.flush().unwrap();
-            let hostid = read_hostid(temp_file.path()).map(|hostid| format!("0x{:08x}", hostid));
+            // Set up a temporary directory that looks like a root filesystem
+            // with an /etc/hostid file.
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let temp_root_dir = temp_dir.path();
+            std::fs::create_dir(temp_root_dir.join("etc")).unwrap();
+            let temp_hostid = temp_root_dir.join("etc/hostid");
+            std::fs::write(&temp_hostid, &bytes).unwrap();
+
+            let hostid = read_hostid(Some(temp_root_dir))
+                .expect(&format!("Failed to read hostid for case: {}", expected))
+                .map(|hostid| format!("0x{:08x}", hostid))
+                .unwrap();
             assert_eq!(hostid, expected);
         }
 
         // Test with non-existent file
-        assert_eq!(read_hostid(Path::new("/path/that/does/not/exist")), None);
+        assert_eq!(
+            read_hostid(Some("/path/that/does/not/exist")).unwrap(),
+            None
+        );
+
+        // Test with an invalid hostid file.
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_root_dir = temp_dir.path();
+        std::fs::create_dir(temp_root_dir.join("etc")).unwrap();
+        let temp_hostid = temp_root_dir.join("etc/hostid");
+        std::fs::write(&temp_hostid, vec![0x00]).unwrap();
+        assert!(read_hostid(Some(temp_root_dir)).is_err());
     }
 
     #[test]
