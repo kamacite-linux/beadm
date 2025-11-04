@@ -2,6 +2,8 @@
 
 * Mounting an already-mounted boot environment is now a no-op.
 
+* An experimental `beadm load` subcommand enables fast rebooting via `kexec(8)`.
+
 # beadm v0.2.1
 
 * D-Bus errors are now more informative.

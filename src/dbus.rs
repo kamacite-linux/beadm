@@ -361,6 +361,18 @@ impl Client for ClientProxy {
     fn active_root(&self) -> Option<&Root> {
         self.active_root.as_ref()
     }
+
+    fn load(&self, root: Option<&Root>) -> Result<(), Error> {
+        let beroot = root.map(|r| r.as_str()).unwrap_or_default();
+        self.connection.call_method(
+            Some(SERVICE_NAME),
+            BOOT_ENV_PATH,
+            Some(MANAGER_INTERFACE),
+            "Load",
+            &beroot,
+        )?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -1178,6 +1190,19 @@ impl<T: Client + 'static> BootEnvironmentManager<T> {
         check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
         self.client.init(pool)?;
         tracing::info!(pool, "Initialized boot environment dataset layout");
+        Ok(())
+    }
+
+    /// Load the activated boot environment's kernel into kexec(8).
+    async fn load(
+        &self,
+        beroot: &str,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        check_authorization(conn, &header, "ca.kamacite.BootEnvironments1.manage").await?;
+        self.client.load(root_from_arg(beroot)?.as_ref())?;
+        tracing::info!("Loaded the kernel of the activated boot environment into kexec");
         Ok(())
     }
 

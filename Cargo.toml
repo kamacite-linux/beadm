@@ -20,6 +20,7 @@ event-listener = "5.4.1"
 tokio = { version = "1.47.1", features = ["rt", "rt-multi-thread"] }
 sd-notify = { version = "0.4.5", optional = true }
 getrandom = "0.3.3"
+natord = "1.0"
 
 [features]
 default = ["dbus", "hooks"]

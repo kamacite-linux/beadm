@@ -1,6 +1,7 @@
 # -*- meson-indent-basic: 8 -*-
 
 sources = files(
+        'be/kexec.rs',
         'be/mock.rs',
         'be/mod.rs',
         'be/scan.rs',

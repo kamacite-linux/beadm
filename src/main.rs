@@ -234,6 +234,8 @@ enum Commands {
         /// The snapshot name.
         snapshot: String,
     },
+    /// Load the activated boot environment's kernel into kexec(8)
+    Load,
     /// Get the host ID from a boot environment.
     #[command(hide = true)]
     Hostid {
@@ -669,6 +671,13 @@ fn execute_command<T: Client + 'static>(
                 .rollback(be_name, snapshot, root)
                 .context("Failed to rollback to snapshot")?;
             println!("Rolled back to '{}'.", snapshot);
+            Ok(())
+        }
+        Commands::Load => {
+            client
+                .load(root)
+                .context("Failed to load boot environment kernel")?;
+            println!("Kernel loaded. Ready to reboot via kexec.");
             Ok(())
         }
         Commands::Hostid { be_name } => {

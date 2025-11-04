@@ -15,7 +15,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use super::validation::{validate_component, validate_dataset_name};
 use super::{
     BootEnvironment, Client, Error, Label, MountMode, Root, Snapshot, generate_snapshot_name,
-    generate_temp_mountpoint, is_temp_mountpoint,
+    generate_temp_mountpoint, is_temp_mountpoint, kexec, scan,
 };
 
 const DESCRIPTION_PROP: &str = "ca.kamacite:description";
@@ -650,6 +650,54 @@ impl Client for LibZfsClient {
 
     fn active_root(&self) -> Option<&Root> {
         self.active_root.as_ref()
+    }
+
+    fn load(&self, root: Option<&Root>) -> Result<(), Error> {
+        kexec::has_kexec()?;
+
+        let root_dataset = self.effective_root(root)?;
+        let bes = self.get_boot_environments(root)?;
+        let target = match bes
+            .iter()
+            // Prefer temporarily activated, then activated.
+            .find(|be| be.boot_once)
+            .or(bes.iter().find(|be| be.next_boot))
+        {
+            Some(target) => target,
+            None => return Err(Error::NoActiveBootEnvironment),
+        };
+
+        let be_path = root_dataset.append(&target.name)?;
+
+        // We need the boot environment to be mounted so that we can read from
+        // its filesystem.
+        //
+        // Note: we don't unmount here, because (a) the user may want to inspect
+        // the filesystem if this fails; and (b) if it succeeds, unmounting
+        // should be handled by the shutdown sequence rather than us.
+        let mountpoint = self.mount(&target.name, None, MountMode::ReadOnly, root)?;
+
+        // Make sure we can find a kernel first.
+        let kernel = scan::KernelPair::scan(&mountpoint)?;
+        let os_release = scan::OsRelease::scan(&mountpoint)?;
+
+        // Read default kernel command line parameters, if any, from the
+        // well-known ZBM property.
+        let lzh = LibHandle::get();
+        let be_dataset = Dataset::filesystem(&lzh, &be_path)?;
+        let params = be_dataset.get_user_property("org.zfsbootmenu:commandline");
+
+        // Try to reboot with a matching hostid so that ZFS pool can be imported
+        // without issue.
+        let current_hostid = read_hostid(None::<PathBuf>)?;
+        let cmdline = build_cmdline(
+            &be_path,
+            params.as_deref(),
+            current_hostid,
+            os_release.as_ref(),
+        );
+
+        kexec::kexec_load(&kernel, &cmdline)
     }
 }
 
@@ -1632,6 +1680,42 @@ fn get_active_boot_environment_root() -> Result<Root, Error> {
     }
 
     Ok(Root::from(parent))
+}
+
+/// Construct the kernel command line for booting a ZFS boot environment, which
+/// will vary based on the distribution.
+fn build_cmdline(
+    dataset: &DatasetName,
+    params: Option<&str>,
+    hostid: Option<u32>,
+    os_release: Option<&scan::OsRelease>,
+) -> String {
+    // The root-on-ZFS filesystem prefix varies by distribution.
+    let mut root_prefix = "root=zfs:"; // A semi-reasonable default.
+    for dist_id in os_release.map(|os| os.ids()).unwrap_or_default() {
+        // Handle known distributions directly.
+        match dist_id {
+            "ubuntu" | "debian" | "void" | "chimera" => {
+                root_prefix = "root=zfs:";
+                break;
+            }
+            "arch" | "artix" => {
+                root_prefix = "zfs=";
+                break;
+            }
+            "gentoo" | "alpine" => {
+                root_prefix = "root=ZFS=";
+                break;
+            }
+            _ => continue,
+        }
+    }
+    let params = params.unwrap_or("quiet loglevel=4").trim();
+    let mut cmdline = format!("{}{} {}", root_prefix, dataset.to_string(), params);
+    if let Some(id) = hostid {
+        cmdline.push_str(&format!(" spl_hostid=0x{:08x}", id));
+    }
+    cmdline
 }
 
 #[cfg(test)]
