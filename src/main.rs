@@ -4,7 +4,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -13,7 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use be::{
     BootEnvironment, Client, EmulatorClient, Error, Label, LibZfsClient, MountMode, Root, Snapshot,
-    format_zfs_bytes, is_temp_mountpoint,
+    format_zfs_bytes, is_temp_mountpoint, scan,
 };
 
 mod be;
@@ -109,7 +108,7 @@ enum Commands {
         host_id: Option<String>,
 
         /// Set a description for an empty boot environment using PRETTY_NAME
-        /// from an /etc/os-release file.
+        /// from an os-release(5) file.
         #[arg(
             long,
             value_name = "FILE",
@@ -504,33 +503,6 @@ fn print_boot_environments<T: Client>(
     Ok(())
 }
 
-/// Parse the `PRETTY_NAME` field from an `/etc/os-release`-style file.
-fn parse_os_release_pretty_name(path: &PathBuf) -> Result<String> {
-    let content = fs::read_to_string(path)?;
-
-    // We could use a regular expression for this instead.
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with("PRETTY_NAME=") {
-            let value = &line[12..];
-
-            // Handle quoted values.
-            if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
-                return Ok(value[1..value.len() - 1].to_string());
-            } else if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
-                return Ok(value[1..value.len() - 1].to_string());
-            } else {
-                return Ok(value.to_string());
-            }
-        }
-    }
-
-    anyhow::bail!(
-        "PRETTY_NAME field not found in os-release file: '{}'",
-        path.to_string_lossy()
-    )
-}
-
 fn execute_command<T: Client + 'static>(
     command: &Commands,
     root: Option<&Root>,
@@ -552,8 +524,10 @@ fn execute_command<T: Client + 'static>(
                 anyhow::bail!("Setting boot environment properties (via -o) is not yet supported.");
             }
             if *empty {
-                let final_description = if let Some(os_release_path) = use_os_release {
-                    Some(parse_os_release_pretty_name(os_release_path)?)
+                let final_description = if let Some(path) = use_os_release {
+                    let os_release = scan::OsRelease::from_path(path)
+                        .context("Failed to parse os-release file")?;
+                    Some(os_release.pretty)
                 } else {
                     description.clone()
                 };

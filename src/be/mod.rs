@@ -13,6 +13,7 @@ use thiserror::Error as ThisError;
 use zvariant::{DeserializeDict, SerializeDict, Type};
 
 mod mock;
+pub(crate) mod scan;
 mod validation;
 mod zfs;
 

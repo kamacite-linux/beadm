@@ -3,6 +3,7 @@
 sources = files(
         'be/mock.rs',
         'be/mod.rs',
+        'be/scan.rs',
         'be/validation.rs',
         'be/zfs.rs',
         'dbus.rs',

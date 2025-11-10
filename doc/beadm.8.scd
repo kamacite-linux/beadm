@@ -73,7 +73,7 @@ same installation) on a single system.
 
 	*--use-os-release* _file_
 		Set a description for an empty boot environment using *PRETTY_NAME* from the
-		specified _/etc/os-release_ file.
+		specified *os-release(5)* file.
 
 *snapshot* [*-d* _desc_] [_name_ | _name@snapshot_]
 
