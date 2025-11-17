@@ -1,5 +1,7 @@
 # beadm (development version)
 
+* Mounting an already-mounted boot environment is now a no-op.
+
 # beadm v0.2.1
 
 * D-Bus errors are now more informative.

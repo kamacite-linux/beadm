@@ -313,7 +313,7 @@ impl Client for LibZfsClient {
         // Check if it's already mounted. Otherwise zfs_mount_at() seems to
         // create a second mountpoint, which is not ideal.
         if let Some(existing) = dataset.get_mountpoint() {
-            if mountpoint.map_or_else(|| false, |mp| mp == existing) {
+            if mountpoint.map_or_else(|| true, |mp| mp == existing) {
                 // We're already done.
                 return Ok(existing);
             }
