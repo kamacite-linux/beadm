@@ -585,6 +585,22 @@ impl Client for EmulatorClient {
     fn active_root(&self) -> Option<&Root> {
         Some(&self.active_root)
     }
+
+    fn load(&self, root: Option<&Root>) -> Result<(), Error> {
+        // Validate that we have a boot environment to load, but otherwise do
+        // nothing.
+        let root = self.effective_root(root);
+        match self
+            .bes
+            .read()
+            .unwrap()
+            .iter()
+            .find(|be| (be.next_boot || be.boot_once) && be.root == *root)
+        {
+            Some(_) => Ok(()),
+            None => Err(Error::NoActiveBootEnvironment),
+        }
+    }
 }
 
 fn sample_boot_environments() -> Vec<BootEnvironment> {

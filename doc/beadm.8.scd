@@ -19,6 +19,7 @@ beadm - Boot Environment Administration
 *beadm* *rename* _name_ _new-name_ ++
 *beadm* *describe* { _name_ | _name@snapshot_ } _desc_ ++
 *beadm* *rollback* _name_ _snapshot_ ++
+*beadm* *load* ++
 *beadm* *init* _pool_ ++
 *beadm* *daemon*
 
@@ -189,6 +190,14 @@ same installation) on a single system.
 	_name_
 		The boot environment to query.
 
+*load*
+
+	Load the activated boot environment's kernel and initramfs into *kexec(8)*,
+	enabling fast reboots on supported systems.
+
+	The kernel, initramfs, and command line are determined automatically using the
+	same techniques used by *zfsbootmenu(7)*.
+
 *init* _pool_
 
 	Create the ZFS dataset layout for boot environments.
@@ -280,6 +289,18 @@ Set a description for a snapshot:
 
 Roll back to a previous snapshot:
 	*beadm rollback current-be@yesterday*
+
+Reboot the activated boot environment via the systemd *kexec(8)* integration:
+
+	*beadm load* ++
+*systemctl kexec*
+
+Reboot into a temporarily activated boot environment via *kexec(8)* (on non-systemd
+systems):
+
+	*beadm activate -t alt* ++
+*beadm load* ++
+*kexec -e*
 
 # EXIT STATUS
 

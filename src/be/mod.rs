@@ -12,6 +12,7 @@ use thiserror::Error as ThisError;
 #[cfg(feature = "dbus")]
 use zvariant::{DeserializeDict, SerializeDict, Type};
 
+mod kexec;
 mod mock;
 pub(crate) mod scan;
 mod validation;
@@ -58,6 +59,15 @@ pub enum Error {
     #[error("Invalid boot environment root: '{name}'")]
     InvalidBootEnvironmentRoot { name: String },
 
+    #[error("No matching kernel and initramfs pair found in /boot")]
+    KernelNotFound,
+
+    #[error("kexec command not found, disabled, or otherwise unavailable: {0}")]
+    KexecNotAvailable(std::io::Error),
+
+    #[error("Failed to execute kexec: {0}")]
+    KexecFailed(std::io::Error),
+
     #[error(transparent)]
     LibzfsError(#[from] zfs::LibzfsError),
 
@@ -87,6 +97,9 @@ impl From<Error> for zbus::fdo::Error {
             Error::InvalidBootEnvironmentRoot { .. } => {
                 zbus::fdo::Error::InvalidArgs(err.to_string())
             }
+            Error::KernelNotFound => zbus::fdo::Error::NotSupported(err.to_string()),
+            Error::KexecNotAvailable(_) => zbus::fdo::Error::NotSupported(err.to_string()),
+            Error::KexecFailed(_) => zbus::fdo::Error::Failed(err.to_string()),
             Error::Io(err) => {
                 let e: zbus::Error = From::from(err);
                 e.into()
@@ -395,6 +408,14 @@ pub trait Client: Send + Sync {
 
     /// Get the active boot environment root, if any.
     fn active_root(&self) -> Option<&Root>;
+
+    /// Load the activated boot environment's kernel and initramfs into
+    /// `kexec(8)`. This enables faster reboots on some systems.
+    ///
+    /// After calling this method, the user can execute the loaded kernel by
+    /// running `kexec -e` or, ideally, `reboot` or `systemctl kexec` with
+    /// systemd.
+    fn load(&self, root: Option<&Root>) -> Result<(), Error>;
 }
 
 /// Generate a snapshot name based on the current time.
