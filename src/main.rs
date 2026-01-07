@@ -198,6 +198,7 @@ enum Commands {
     /// Unmount an inactive boot environment.
     ///
     /// Unmounting will not remove the mountpoint unless it is one we created.
+    #[command(visible_alias = "umount")]
     Unmount {
         /// The boot environment.
         ///
