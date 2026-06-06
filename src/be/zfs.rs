@@ -801,13 +801,21 @@ impl Dataset {
                 &mut mountpoint_ptr as *mut *mut std::os::raw::c_char,
             )
         };
-        if result != 0 && !mountpoint_ptr.is_null() {
+        // `zfs_is_mounted` allocates the mountpoint string with strdup() and
+        // transfers ownership to us, so we must free it once we've copied it
+        // into an owned PathBuf. It is only set when the call returns true, but
+        // we free unconditionally whenever the pointer is non-null to be safe.
+        let mountpoint = if result != 0 && !mountpoint_ptr.is_null() {
             let cstr = unsafe { CStr::from_ptr(mountpoint_ptr) };
             let path = Path::new(OsStr::from_bytes(cstr.to_bytes()));
             Some(path.to_path_buf())
         } else {
             None
+        };
+        if !mountpoint_ptr.is_null() {
+            unsafe { libc::free(mountpoint_ptr as *mut c_void) };
         }
+        mountpoint
     }
 
     /// Get the space used by this dataset.
