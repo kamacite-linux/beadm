@@ -59,7 +59,7 @@ enum Commands {
     /// Mark a boot environment as the default root filesystem.
     Activate {
         /// The boot environment to activate.
-        #[arg(required_unless_present = "deactivate")]
+        #[arg(value_name = "name", required_unless_present = "deactivate")]
         be_name: Option<String>,
 
         /// Activate the boot environment only for the next boot.
@@ -73,6 +73,7 @@ enum Commands {
     /// Create a new boot environment.
     Create {
         /// A name for the new boot environment.
+        #[arg(value_name = "name")]
         be_name: String,
 
         /// Activate the new boot environment after creating it.
@@ -84,17 +85,17 @@ enum Commands {
         temp_activate: bool,
 
         /// An optional description for the new boot environment.
-        #[arg(short = 'd')]
+        #[arg(short = 'd', value_name = "desc")]
         description: Option<String>,
 
         /// Create the new boot environment from this boot environment or
         /// snapshot, rather than the active one.
-        #[arg(short = 'e', conflicts_with = "empty")]
+        #[arg(short = 'e', value_name = "source", conflicts_with = "empty")]
         source: Option<Label>,
 
         /// Set additional ZFS properties for the new boot environment (in
         /// 'property=value' format).
-        #[arg(short = 'o')]
+        #[arg(short = 'o', value_name = "property=value")]
         property: Vec<String>,
 
         /// Create an empty boot environment instead of cloning another boot
@@ -120,21 +121,23 @@ enum Commands {
     },
     /// Create a snapshot of a boot environment.
     Snapshot {
-        /// The boot environment and optional snapshot (in the form 'beName' or
-        /// 'beName@snapshot').
+        /// The boot environment and optional snapshot (in the form 'name' or
+        /// 'name@snapshot').
         ///
         /// When the snapshot name is omitted, one will be generated
         /// automatically from the current time.
+        #[arg(value_name = "name | name@snapshot")]
         source: Option<Label>,
 
         /// An optional description for the snapshot.
-        #[arg(short = 'd')]
+        #[arg(short = 'd', value_name = "desc")]
         description: Option<String>,
     },
     /// Destroy an existing boot environment or snapshot.
     Destroy {
-        /// The boot environment or snapshot (in the form 'beName' or
-        /// 'beName@snapshot').
+        /// The boot environment or snapshot (in the form 'name' or
+        /// 'name@snapshot').
+        #[arg(value_name = "name | name@snapshot")]
         target: Label,
 
         /// Forcefully unmount the boot environment if needed.
@@ -148,6 +151,7 @@ enum Commands {
     /// List boot environments.
     List {
         /// Include only this boot environment.
+        #[arg(value_name = "name")]
         be_name: Option<String>,
 
         /// Include subordinate filesystems and snapshots of each boot environment.
@@ -169,14 +173,14 @@ enum Commands {
         /// Sort boot environments by this property, ascending.
         #[arg(
             short = 'k',
-            value_name = "PROP",
+            value_name = "property",
             default_value = "date",
             conflicts_with = "sort_des"
         )]
         sort_asc: SortField,
 
         /// Sort boot environments by this property, descending.
-        #[arg(short = 'K', value_name = "PROP", conflicts_with = "sort_asc")]
+        #[arg(short = 'K', value_name = "property", conflicts_with = "sort_asc")]
         sort_des: Option<SortField>,
     },
     /// Mount a boot environment.
@@ -185,14 +189,15 @@ enum Commands {
         ///
         /// The active boot environment (i.e. the current root filesystem)
         /// is already mounted and cannot have its mountpoint changed.
+        #[arg(value_name = "name")]
         be_name: String,
 
         /// A mount point (if omitted, creates a temporary mount in /tmp).
-        #[arg(value_hint = clap::ValueHint::DirPath)]
+        #[arg(value_name = "mountpoint", value_hint = clap::ValueHint::DirPath)]
         mountpoint: Option<PathBuf>,
 
         /// Mount as read/write or read-only.
-        #[arg(short = 's', default_value = "rw")]
+        #[arg(short = 's', value_name = "mode", default_value = "rw")]
         mode: MountMode,
     },
     /// Unmount an inactive boot environment.
@@ -204,6 +209,7 @@ enum Commands {
         ///
         /// The active boot environment (i.e. the current root filesystem)
         /// cannot be unmounted.
+        #[arg(value_name = "name")]
         be_name: String,
 
         /// Force unmounting.
@@ -213,26 +219,32 @@ enum Commands {
     /// Rename a boot environment.
     Rename {
         /// The boot environment.
+        #[arg(value_name = "name")]
         be_name: String,
 
         /// A new name for the boot environment.
+        #[arg(value_name = "new-name")]
         new_name: String,
     },
     /// Set a description for an existing boot environment or snapshot.
     Describe {
-        /// The boot environment or snapshot (in the form 'beName' or
-        /// 'beName@snapshot').
+        /// The boot environment or snapshot (in the form 'name' or
+        /// 'name@snapshot').
+        #[arg(value_name = "name | name@snapshot")]
         target: Label,
 
         /// The description to set.
+        #[arg(value_name = "desc")]
         description: String,
     },
     /// Roll back a boot environment to an earlier snapshot.
     Rollback {
         /// The boot environment.
+        #[arg(value_name = "name")]
         be_name: String,
 
         /// The snapshot name.
+        #[arg(value_name = "snapshot")]
         snapshot: String,
     },
     /// Get the host ID from a boot environment.
