@@ -1428,8 +1428,8 @@ impl LibHandle {
     ///
     /// ## Panics
     ///
-    /// Panics if `libzfs` cannot be initialized, if the lock is poisoned, or
-    /// (maybe) if the handle is already locked by the current thread.
+    /// Panics if `libzfs` cannot be initialized, or (maybe) if the handle is
+    /// already locked by the current thread.
     pub fn get() -> MutexGuard<'static, Self> {
         // TODO: This would be a hell of a lot safer if ReentrantLock was stable.
         static LZH: LazyLock<Mutex<LibHandle>> = LazyLock::new(|| {
@@ -1441,7 +1441,12 @@ impl LibHandle {
                 handle: unsafe { ptr::NonNull::new_unchecked(handle) },
             })
         });
-        LZH.lock().expect("Failed to acquire libzfs handle")
+        // Recover from a poisoned lock rather than propagating the panic. A
+        // panic while the guard was held (e.g. in an iterator callback) leaves
+        // the libzfs handle itself intact -- it's an opaque pointer we never
+        // mutate from Rust -- so poisoning would otherwise turn one failed
+        // operation into a permanently dead daemon.
+        LZH.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Get the current libzfs error.
