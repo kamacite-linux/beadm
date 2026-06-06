@@ -16,6 +16,7 @@ beadm - Boot Environment Administration
 *beadm* *list* [*-adsH*] [*-k* _property_ | *-K* _property_] [_name_] ++
 *beadm* *mount* [*-s* _mode_] _name_ [_mountpoint_] ++
 *beadm* *unmount* [*-f*] _name_ ++
+*beadm* *umount* [*-f*] _name_ ++
 *beadm* *rename* _name_ _new-name_ ++
 *beadm* *describe* { _name_ | _name@snapshot_ } _desc_ ++
 *beadm* *rollback* _name_ _snapshot_ ++
@@ -141,7 +142,8 @@ same installation) on a single system.
 	*-s* _mode_
 		Mount as read/write (_rw_) or read-only (_ro_). Default is _rw_.
 
-*unmount* [*-f*] _name_
+*unmount* [*-f*] _name_ ++
+*umount* [*-f*] _name_
 
 	Unmount an inactive boot environment.
 

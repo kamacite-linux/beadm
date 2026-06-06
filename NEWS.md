@@ -2,6 +2,9 @@
 
 * Mounting an already-mounted boot environment is now a no-op.
 
+* `beadm umount` is now an alias for `beadm unmount`, matching the convention on
+  the original Solaris (#4, @jmcp).
+
 # beadm v0.2.1
 
 * D-Bus errors are now more informative.
