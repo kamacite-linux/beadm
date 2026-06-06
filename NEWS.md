@@ -7,6 +7,8 @@
 
 * The `-o property=value` flag to `beadm create` now actually works.
 
+* `beadm rollback` now works as expected.
+
 # beadm v0.2.1
 
 * D-Bus errors are now more informative.

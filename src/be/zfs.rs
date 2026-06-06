@@ -459,7 +459,7 @@ impl Client for LibZfsClient {
         let lzh = LibHandle::get();
         let be_path = root.append(be_name)?;
         let be_dataset = Dataset::filesystem(&lzh, &be_path)?;
-        let snap_path = root.snapshot(snapshot)?;
+        let snap_path = be_path.snapshot(snapshot)?;
         let snap_dataset = Dataset::snapshot(&lzh, &snap_path)?;
         be_dataset.rollback_to(&lzh, &snap_dataset)
     }
