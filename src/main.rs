@@ -521,9 +521,6 @@ fn execute_command<T: Client + 'static>(
             host_id,
             use_os_release,
         } => {
-            if !property.is_empty() {
-                anyhow::bail!("Setting boot environment properties (via -o) is not yet supported.");
-            }
             if *empty {
                 let final_description = if let Some(path) = use_os_release {
                     let os_release = scan::OsRelease::from_path(path)

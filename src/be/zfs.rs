@@ -57,7 +57,7 @@ impl Client for LibZfsClient {
         be_name: &str,
         description: Option<&str>,
         source: Option<&Label>,
-        _properties: &[String],
+        properties: &[String],
         root: Option<&Root>,
     ) -> Result<(), Error> {
         let root = self.effective_root(root)?;
@@ -70,6 +70,26 @@ impl Client for LibZfsClient {
         } else {
             None
         };
+
+        // Build the clone properties (and validate user-specified properties)
+        // before creating any snapshot, so that invalid input fails without
+        // leaving an intermediate snapshot behind.
+        let mut clone_props = NvList::from(&[("canmount", "noauto"), ("mountpoint", "/")])?;
+        if let Some(desc) = description {
+            clone_props.add_string(DESCRIPTION_PROP, desc)?;
+        }
+
+        // Add user-specified properties, protecting critical properties
+        for prop_string in properties {
+            let (name, value) = super::parse_property(prop_string)?;
+
+            // Protect critical properties that are essential for boot environments
+            if name == "canmount" || name == "mountpoint" {
+                return Err(Error::invalid_prop(name, value));
+            }
+
+            clone_props.add_string(name, value)?;
+        }
 
         let snapshot = match source {
             Some(Label::Snapshot(name, snapshot)) => {
@@ -121,11 +141,6 @@ impl Client for LibZfsClient {
             }
         }?;
 
-        let mut clone_props = NvList::from(&[("canmount", "noauto"), ("mountpoint", "/")])?;
-        if let Some(desc) = description {
-            clone_props.add_string(DESCRIPTION_PROP, desc)?;
-        }
-
         // Clone the source snapshot to create the new boot environment.
         //
         // TODO: Investigate 'beadm' for whether we need to handle recursion.
@@ -150,12 +165,24 @@ impl Client for LibZfsClient {
         be_name: &str,
         description: Option<&str>,
         _host_id: Option<&str>,
-        _properties: &[String],
+        properties: &[String],
         root: Option<&Root>,
     ) -> Result<(), Error> {
         let mut props = NvList::from(&[("canmount", "noauto"), ("mountpoint", "/")])?;
         if let Some(desc) = description {
             props.add_string(DESCRIPTION_PROP, desc)?;
+        }
+
+        // Add user-specified properties, protecting critical properties
+        for prop_string in properties {
+            let (name, value) = super::parse_property(prop_string)?;
+
+            // Protect critical properties that are essential for boot environments
+            if name == "canmount" || name == "mountpoint" {
+                return Err(Error::invalid_prop(name, value));
+            }
+
+            props.add_string(name, value)?;
         }
 
         let be_path = self.effective_root(root)?.append(be_name)?;

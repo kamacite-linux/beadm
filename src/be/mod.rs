@@ -440,6 +440,29 @@ pub(crate) fn is_temp_mountpoint(path: &PathBuf) -> bool {
     path.to_string_lossy().starts_with(prefix.to_str().unwrap())
 }
 
+/// Parse a "property=value" string into a (property, value) tuple.
+///
+/// Validates format only; property validation is done by clients.
+pub fn parse_property(prop_string: &str) -> Result<(&str, &str), Error> {
+    let parts: Vec<&str> = prop_string.splitn(2, '=').collect();
+
+    if parts.len() != 2 {
+        return Err(Error::invalid_prop(prop_string, ""));
+    }
+
+    let (name, value) = (parts[0], parts[1]);
+
+    if name.is_empty() {
+        return Err(Error::invalid_prop("", value));
+    }
+
+    if value.is_empty() {
+        return Err(Error::invalid_prop(name, ""));
+    }
+
+    Ok((name, value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,5 +477,60 @@ mod tests {
         ));
         assert!(!is_temp_mountpoint(&PathBuf::from("/mnt/custom")));
         assert!(!is_temp_mountpoint(&PathBuf::from("/")));
+    }
+
+    #[test]
+    fn test_parse_property_valid() {
+        // Basic property
+        let (name, value) = parse_property("compression=lz4").unwrap();
+        assert_eq!(name, "compression");
+        assert_eq!(value, "lz4");
+
+        // User property
+        let (name, value) = parse_property("org.example:tag=production").unwrap();
+        assert_eq!(name, "org.example:tag");
+        assert_eq!(value, "production");
+
+        // Quota property
+        let (name, value) = parse_property("quota=10G").unwrap();
+        assert_eq!(name, "quota");
+        assert_eq!(value, "10G");
+
+        // Property that clients may protect (but parse_property accepts)
+        let (name, value) = parse_property("canmount=noauto").unwrap();
+        assert_eq!(name, "canmount");
+        assert_eq!(value, "noauto");
+
+        let (name, value) = parse_property("mountpoint=/").unwrap();
+        assert_eq!(name, "mountpoint");
+        assert_eq!(value, "/");
+
+        // Value containing equals sign
+        let (name, value) = parse_property("mountpoint=/mnt/data").unwrap();
+        assert_eq!(name, "mountpoint");
+        assert_eq!(value, "/mnt/data");
+
+        // Multiple equals in value
+        let (name, value) = parse_property("prop=val=ue").unwrap();
+        assert_eq!(name, "prop");
+        assert_eq!(value, "val=ue");
+    }
+
+    #[test]
+    fn test_parse_property_invalid() {
+        // No equals sign
+        assert!(parse_property("invalid").is_err());
+
+        // Empty name
+        assert!(parse_property("=value").is_err());
+
+        // Empty value
+        assert!(parse_property("property=").is_err());
+
+        // Just equals
+        assert!(parse_property("=").is_err());
+
+        // Empty string
+        assert!(parse_property("").is_err());
     }
 }

@@ -66,7 +66,9 @@ same installation) on a single system.
 
 	*-o* _property=value_
 		Set additional ZFS properties for the new boot environment. May be specified
-		multiple times.
+		multiple times. See *zfsprops(7)* for available properties. Note that
+		*canmount* and *mountpoint* properties cannot be set as they are managed
+		automatically for boot environments.
 
 	*--empty*
 		Create an empty boot environment instead of cloning another boot environment

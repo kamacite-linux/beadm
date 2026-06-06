@@ -5,6 +5,8 @@
 * `beadm umount` is now an alias for `beadm unmount`, matching the convention on
   the original Solaris (#4, @jmcp).
 
+* The `-o property=value` flag to `beadm create` now actually works.
+
 # beadm v0.2.1
 
 * D-Bus errors are now more informative.

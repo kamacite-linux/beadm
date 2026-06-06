@@ -5,10 +5,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
 
@@ -23,6 +24,7 @@ use super::{
 pub struct EmulatorClient {
     active_root: Root,
     bes: RwLock<Vec<BootEnvironment>>,
+    properties: Arc<RwLock<HashMap<String, HashMap<String, String>>>>,
 }
 
 impl EmulatorClient {
@@ -30,6 +32,7 @@ impl EmulatorClient {
         Self {
             active_root: Root::from_str("zfake/ROOT").unwrap(),
             bes: RwLock::new(bes),
+            properties: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -45,6 +48,7 @@ impl EmulatorClient {
         Self {
             active_root: Root::from_str("zfake/ROOT").unwrap(),
             bes: RwLock::new(vec![]),
+            properties: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -56,6 +60,23 @@ impl EmulatorClient {
     fn effective_root<'a>(&'a self, root: Option<&'a Root>) -> &'a Root {
         root.unwrap_or(&self.active_root)
     }
+
+    /// Build the key used to track properties for a boot environment.
+    ///
+    /// Properties are scoped by root (the same way boot environments are), so
+    /// the key is the full dataset path rather than the bare name. This avoids
+    /// collisions when the same name exists under different roots.
+    fn property_key(root: &Root, be_name: &str) -> String {
+        format!("{}/{}", root.as_str(), be_name)
+    }
+
+    /// Get properties for a boot environment in the active root (for testing).
+    #[cfg(test)]
+    pub fn get_properties(&self, be_name: &str) -> Option<HashMap<String, String>> {
+        let key = Self::property_key(&self.active_root, be_name);
+        let props = self.properties.read().unwrap();
+        props.get(&key).cloned()
+    }
 }
 
 impl Client for EmulatorClient {
@@ -64,7 +85,7 @@ impl Client for EmulatorClient {
         be_name: &str,
         description: Option<&str>,
         source: Option<&Label>,
-        _properties: &[String],
+        properties: &[String],
         root: Option<&Root>,
     ) -> Result<(), Error> {
         let root = self.effective_root(root);
@@ -123,6 +144,29 @@ impl Client for EmulatorClient {
             return Err(Error::conflict(be_name));
         }
 
+        // Parse and store properties, protecting critical properties
+        let mut props_map = HashMap::new();
+        for prop_string in properties {
+            let (name, value) = super::parse_property(prop_string)?;
+
+            // Protect critical properties that are essential for boot environments
+            if name == "canmount" || name == "mountpoint" {
+                return Err(Error::invalid_prop(name, value));
+            }
+
+            props_map.insert(name.to_string(), value.to_string());
+        }
+
+        // Replace any stale properties left over from a prior BE with this name.
+        let key = Self::property_key(root, be_name);
+        let mut props = self.properties.write().unwrap();
+        if props_map.is_empty() {
+            props.remove(&key);
+        } else {
+            props.insert(key, props_map);
+        }
+        drop(props);
+
         bes.push(BootEnvironment {
             name: be_name.to_string(),
             root: root.clone(),
@@ -143,7 +187,7 @@ impl Client for EmulatorClient {
         be_name: &str,
         description: Option<&str>,
         _host_id: Option<&str>,
-        _properties: &[String],
+        properties: &[String],
         root: Option<&Root>,
     ) -> Result<(), Error> {
         let root = self.effective_root(root);
@@ -153,6 +197,29 @@ impl Client for EmulatorClient {
         if bes.iter().any(|be| be.name == be_name && be.root == *root) {
             return Err(Error::conflict(be_name));
         }
+
+        // Parse and store properties, protecting critical properties
+        let mut props_map = HashMap::new();
+        for prop_string in properties {
+            let (name, value) = super::parse_property(prop_string)?;
+
+            // Protect critical properties that are essential for boot environments
+            if name == "canmount" || name == "mountpoint" {
+                return Err(Error::invalid_prop(name, value));
+            }
+
+            props_map.insert(name.to_string(), value.to_string());
+        }
+
+        // Replace any stale properties left over from a prior BE with this name.
+        let key = Self::property_key(root, be_name);
+        let mut props = self.properties.write().unwrap();
+        if props_map.is_empty() {
+            props.remove(&key);
+        } else {
+            props.insert(key, props_map);
+        }
+        drop(props);
 
         // Create new empty boot environment
         bes.push(BootEnvironment {
@@ -220,6 +287,10 @@ impl Client for EmulatorClient {
                     .write()
                     .unwrap()
                     .retain(|x| !(x.name == *be_name && x.root == *root));
+
+                // Drop any properties tracked for the destroyed BE.
+                let key = Self::property_key(root, be_name);
+                self.properties.write().unwrap().remove(&key);
 
                 Ok(())
             }
@@ -382,6 +453,14 @@ impl Client for EmulatorClient {
 
         // Perform the rename
         bes[be_index].name = new_name.to_string();
+
+        // Move any tracked properties to the new name (within the same root).
+        let old_key = Self::property_key(root, be_name);
+        let new_key = Self::property_key(root, new_name);
+        let mut props = self.properties.write().unwrap();
+        if let Some(be_props) = props.remove(&old_key) {
+            props.insert(new_key, be_props);
+        }
 
         Ok(())
     }
@@ -2192,5 +2271,187 @@ mod tests {
             Some(&other_root),
         );
         assert!(matches!(result, Err(Error::NotFound { name }) if name == "alt"));
+    }
+
+    #[test]
+    fn test_create_with_properties() {
+        let client = EmulatorClient::sampled();
+
+        // Create BE with properties
+        client
+            .create(
+                "test-be",
+                Some("Test BE"),
+                None,
+                &["compression=lz4".to_string(), "quota=10G".to_string()],
+                None,
+            )
+            .unwrap();
+
+        // Verify properties were stored
+        let props = client.get_properties("test-be").unwrap();
+        assert_eq!(props.get("compression"), Some(&"lz4".to_string()));
+        assert_eq!(props.get("quota"), Some(&"10G".to_string()));
+    }
+
+    #[test]
+    fn test_create_empty_with_properties() {
+        let client = EmulatorClient::empty();
+
+        // Create empty BE with properties
+        client
+            .create_empty(
+                "test-empty",
+                Some("Empty BE"),
+                None,
+                &["recordsize=1M".to_string()],
+                None,
+            )
+            .unwrap();
+
+        // Verify properties were stored
+        let props = client.get_properties("test-empty").unwrap();
+        assert_eq!(props.get("recordsize"), Some(&"1M".to_string()));
+    }
+
+    #[test]
+    fn test_create_with_user_property() {
+        let client = EmulatorClient::sampled();
+
+        // Create BE with user property
+        client
+            .create(
+                "test-be",
+                None,
+                None,
+                &["org.example:tag=production".to_string()],
+                None,
+            )
+            .unwrap();
+
+        // Verify user property was stored
+        let props = client.get_properties("test-be").unwrap();
+        assert_eq!(
+            props.get("org.example:tag"),
+            Some(&"production".to_string())
+        );
+    }
+
+    #[test]
+    fn test_create_with_protected_property_canmount() {
+        let client = EmulatorClient::sampled();
+
+        // Attempt to create BE with protected canmount property
+        let result = client.create(
+            "test-be",
+            None,
+            None,
+            &["canmount=on".to_string()],
+            None,
+        );
+
+        // Should fail with InvalidProp error
+        assert!(matches!(result, Err(Error::InvalidProp { .. })));
+    }
+
+    #[test]
+    fn test_create_with_protected_property_mountpoint() {
+        let client = EmulatorClient::sampled();
+
+        // Attempt to create BE with protected mountpoint property
+        let result = client.create(
+            "test-be",
+            None,
+            None,
+            &["mountpoint=/mnt/alt".to_string()],
+            None,
+        );
+
+        // Should fail with InvalidProp error
+        assert!(matches!(result, Err(Error::InvalidProp { .. })));
+    }
+
+    #[test]
+    fn test_create_empty_with_protected_property() {
+        let client = EmulatorClient::empty();
+
+        // Attempt to create empty BE with protected property
+        let result = client.create_empty(
+            "test-be",
+            None,
+            None,
+            &["canmount=noauto".to_string()],
+            None,
+        );
+
+        // Should fail with InvalidProp error
+        assert!(matches!(result, Err(Error::InvalidProp { .. })));
+    }
+
+    #[test]
+    fn test_create_with_invalid_property_format() {
+        let client = EmulatorClient::sampled();
+
+        // Attempt to create BE with malformed property
+        let result = client.create(
+            "test-be",
+            None,
+            None,
+            &["invalid-format".to_string()],
+            None,
+        );
+
+        // Should fail with InvalidProp error
+        assert!(matches!(result, Err(Error::InvalidProp { .. })));
+    }
+
+    #[test]
+    fn test_create_with_empty_properties() {
+        let client = EmulatorClient::sampled();
+
+        // Create BE with no properties (backward compatibility)
+        client
+            .create("test-be", Some("Test BE"), None, &[], None)
+            .unwrap();
+
+        // Verify no properties were stored
+        assert!(client.get_properties("test-be").is_none());
+    }
+
+    #[test]
+    fn test_destroy_clears_properties() {
+        let client = EmulatorClient::sampled();
+
+        client
+            .create("test-be", None, None, &["compression=lz4".to_string()], None)
+            .unwrap();
+        assert!(client.get_properties("test-be").is_some());
+
+        client
+            .destroy(&Label::Name("test-be".to_string()), false, false, None)
+            .unwrap();
+
+        // Properties should be dropped along with the BE.
+        assert!(client.get_properties("test-be").is_none());
+
+        // Recreating the same name without properties must not surface stale state.
+        client.create("test-be", None, None, &[], None).unwrap();
+        assert!(client.get_properties("test-be").is_none());
+    }
+
+    #[test]
+    fn test_rename_moves_properties() {
+        let client = EmulatorClient::sampled();
+
+        client
+            .create("test-be", None, None, &["compression=lz4".to_string()], None)
+            .unwrap();
+
+        client.rename("test-be", "renamed-be", None).unwrap();
+
+        // Properties follow the BE to its new name.
+        assert!(client.get_properties("test-be").is_none());
+        let props = client.get_properties("renamed-be").unwrap();
+        assert_eq!(props.get("compression"), Some(&"lz4".to_string()));
     }
 }
