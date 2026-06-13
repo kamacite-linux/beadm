@@ -1,3 +1,5 @@
+# beadm (development version)
+
 # beadm v0.2.2
 
 * Mounting an already-mounted boot environment is now a no-op.
