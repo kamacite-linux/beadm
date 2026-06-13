@@ -2,7 +2,7 @@
 
 project('beadm',
         'rust',
-        version : '0.2.2-dev',
+        version : '0.2.2',
         meson_version : '>=0.60.0',
         default_options : ['warning_level=2'])
 

@@ -1,6 +1,6 @@
 [package]
 name = "beadm"
-version = "0.2.2-dev"
+version = "0.2.2"
 edition = "2024"
 
 [dependencies]
