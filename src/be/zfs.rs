@@ -496,7 +496,7 @@ impl Client for LibZfsClient {
                 name: path.basename(),
                 root: Root::from(root.clone()),
                 guid: dataset.get_guid(),
-                description: dataset.get_user_property(DESCRIPTION_PROP),
+                description: dataset.get_user_property(DESCRIPTION_PROP, false),
                 mountpoint: dataset.get_mountpoint(),
                 active,
                 next_boot,
@@ -520,7 +520,7 @@ impl Client for LibZfsClient {
                 snapshots.push(Snapshot {
                     name: path.basename(),
                     root: Root::from(root.clone()),
-                    description: snapshot.get_user_property(DESCRIPTION_PROP),
+                    description: snapshot.get_user_property(DESCRIPTION_PROP, false),
                     space: snapshot.get_used_space(),
                     created: snapshot.get_creation_time(),
                 });
@@ -1040,7 +1040,7 @@ impl Dataset {
     }
 
     /// Get a specific ZFS user property for this dataset.
-    fn get_user_property(&self, prop_name: &str) -> Option<String> {
+    fn get_user_property(&self, prop_name: &str, allow_inherited: bool) -> Option<String> {
         let prop_cstr = match CString::new(prop_name) {
             Ok(cstr) => cstr,
             Err(_) => return None,
@@ -1065,6 +1065,29 @@ impl Dataset {
         if result != 0 || prop_nvlist_ptr.is_null() {
             // No entry for this user property.
             return None;
+        }
+
+        if !allow_inherited {
+            let own_name = match self.get_name() {
+                Some(n) => n.to_string(),
+                None => return None,
+            };
+            let source_cstr = CString::new("source").unwrap();
+            let mut source_ptr: *mut std::os::raw::c_char = ptr::null_mut();
+            let result = unsafe {
+                ffi::nvlist_lookup_string(
+                    prop_nvlist_ptr,
+                    source_cstr.as_ptr(),
+                    &mut source_ptr as *mut *mut std::os::raw::c_char,
+                )
+            };
+            if result != 0 || source_ptr.is_null() {
+                return None;
+            }
+            let source = unsafe { CStr::from_ptr(source_ptr) }.to_string_lossy();
+            if source != own_name && source != "$recvd" {
+                return None;
+            }
         }
 
         // The property is stored under the aptly-named "value" name.

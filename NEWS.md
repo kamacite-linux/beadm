@@ -9,6 +9,9 @@
 
 * `beadm rollback` now works as expected.
 
+* `beadm list` no longer shows DESCRIPTION entires inherited from parent
+  datasets on either boot environments or snapshots.
+
 # beadm v0.2.1
 
 * D-Bus errors are now more informative.
